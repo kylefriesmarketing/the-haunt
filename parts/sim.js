@@ -206,14 +206,15 @@
       return result;
     }
 
-    function groupInWindow(node) {
+    function groupInWindow(node, mult) {
+      const w = node.window * (mult || 1);
       let best = null, bd = 1e9;
       for (const grp of N.groups) {
         if (grp.mergedInto) continue;
         const lead = leaderS(grp);
         if (lead === null) continue;
         const d = Math.abs(lead - node.s);
-        if (d < node.window && d < bd) { bd = d; best = grp; }
+        if (d < w && d < bd) { bd = d; best = grp; }
       }
       return best;
     }
@@ -222,8 +223,8 @@
       for (const gst of grp.guests) if (!gst.out && !gst.chicken) m = m === null ? gst.s : Math.max(m, gst.s);
       return m;
     }
-    function gradeFor(node) {
-      const grp = groupInWindow(node);
+    function gradeFor(node, wmult) {
+      const grp = groupInWindow(node, wmult);
       if (!grp) return { mult: 0, label: 'MISS', id: 'miss' };
       const toff = (leaderS(grp) - node.s) / D().GUEST.speed; // negative = early
       const adt = Math.abs(toff);

@@ -31,6 +31,8 @@
     conn.on('data', msg => {
       if (!msg || typeof msg !== 'object') return;
       if (msg.t === 'hello') {
+        // a repeat hello is a RETRY, not a second monster — answer it again, don't burn a seat
+        if (entry.seat !== null) { try { conn.send({ t: 'welcome', seat: entry.seat, roster: N.roster }); } catch (e) { } return; }
         const seat = nextSeat();
         if (seat === null) { try { conn.send({ t: 'full' }); } catch (e) { } return; }
         entry.seat = seat; entry.name = String(msg.name || 'a monster').slice(0, 18);
@@ -52,10 +54,15 @@
       fire('leave', { seat: entry.seat, name: entry.name });
     });
   }
-  function wireGuest(conn) {
+  function wireGuest(conn, onWelcome) {
     conn.on('data', msg => {
       if (!msg || typeof msg !== 'object') return;
-      if (msg.t === 'welcome') { N.seat = msg.seat; N.roster = msg.roster || []; fire('seat', { seat: msg.seat }); }
+      if (msg.t === 'welcome') {
+        const first = N.seat !== msg.seat || !N.active;
+        N.seat = msg.seat; N.roster = msg.roster || []; N.active = true;
+        if (onWelcome) onWelcome();
+        if (first) fire('seat', { seat: msg.seat });
+      }
       else if (msg.t === 'roster') { N.roster = msg.roster || []; fire('roster', N.roster); }
       else if (msg.t === 'full') fire('full', {});
       else fire(msg.t, msg);                                  // start · snap · ev · over · bye
@@ -105,7 +112,10 @@
         N.conns = []; rebuildRoster();
         res({ code });
       });
-      peer.on('connection', conn => { conn.on('open', () => wireHost(conn)); });
+      /* ⚠️ wire the data handler the INSTANT the connection appears. Waiting for 'open' loses
+         any hello that arrives first, and a lost hello is a friend who never gets a seat —
+         they see a lobby, the host sees an empty room, and broadcast skips them forever. */
+      peer.on('connection', conn => { wireHost(conn); });
       peer.on('error', e => { N.lastErr = e; if (!settled) { settled = true; rej(e); } });
     }));
   };
@@ -116,21 +126,26 @@
     return loadPeer().then(() => new Promise((res, rej) => {
       const peer = new window.Peer({ debug: 0 });
       N.peer = peer;
-      let settled = false;
+      let settled = false, knocking = null;
+      const stopKnocking = () => { if (knocking) { clearInterval(knocking); knocking = null; } };
+      const fail = e => { if (settled) return; settled = true; stopKnocking(); rej(e); };
       peer.on('open', () => {
         const conn = peer.connect(PEER_PREFIX + code, { reliable: true });
+        N.isHost = false; N.code = code;
+        N.name = String(name || 'a monster').slice(0, 18);
+        N.conns = [{ conn }];
+        /* you are NOT in the room until the host seats you — resolving on our own
+           connection open is what made a lost hello look like a successful join. */
+        wireGuest(conn, () => { if (!settled) { settled = true; stopKnocking(); res({ joined: true, seat: N.seat }); } });
         conn.on('open', () => {
-          N.active = true; N.isHost = false; N.code = code;
-          N.name = String(name || 'a monster').slice(0, 18);
-          N.conns = [{ conn }];
-          wireGuest(conn);
-          conn.send({ t: 'hello', name: N.name });
-          settled = true; res({ joined: true });
+          const knock = () => { try { conn.send({ t: 'hello', name: N.name }); } catch (e) { } };
+          knock();
+          knocking = setInterval(() => { if (settled) stopKnocking(); else knock(); }, 700);
         });
-        conn.on('error', e => { if (!settled) { settled = true; rej(e); } });
+        conn.on('error', e => fail(e));
       });
-      peer.on('error', e => { N.lastErr = e; if (!settled) { settled = true; rej(e); } });
-      setTimeout(() => { if (!settled) { settled = true; rej(new Error('nobody answered that code')); } }, 15000);
+      peer.on('error', e => { N.lastErr = e; fail(e); });
+      setTimeout(() => fail(new Error('the barn never answered — check the code, and make sure they\'re still on the lobby screen')), 15000);
     }));
   };
 

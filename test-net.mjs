@@ -226,7 +226,37 @@ console.log('\n[7] a monster can always walk out');
   ok(guests[1].snaps < guests[0].snaps, 'the one who left stops getting it');
 }
 
-console.log('\n[8] names');
+console.log('\n[8] the lost hello (the bug Kyle hit: a lobby with nobody in it)');
+{
+  /* the real failure: the guest's hello lands BEFORE the host has a data listener on that
+     connection. PeerJS drops it, the guest sits in a lobby, the host sees an empty room, and
+     broadcast — which skips seatless connections — never reaches them again. */
+  H.Net.test.reset();
+  H.Net.test.hostLocal('the boss', () => { });
+  const [hostEnd, guestEnd] = H.Net.test.pair('late');
+  // guest knocks into the void: nothing is listening on the host end yet
+  guestEnd.send({ t: 'hello', name: 'tater' });
+  let seat = null, welcomes = 0;
+  guestEnd.on('data', m => { if (m.t === 'welcome') { seat = m.seat; welcomes++; } });
+  H.Net.test.acceptGuest(hostEnd);                     // host wires up a beat too late
+  ok(seat === null, 'the first knock really is lost (the bug reproduces)');
+  ok(H.Net.roster.length === 1, 'and the host\'s room looks empty', H.Net.roster.length + ' seat');
+  // the fix: the guest keeps knocking, so the next one lands
+  guestEnd.send({ t: 'hello', name: 'tater' });
+  ok(seat === 1, 'a second knock gets them seated', 'seat ' + seat);
+  ok(H.Net.roster.length === 2, 'and the host sees them', H.Net.roster.map(r => r.name).join(' · '));
+  // and a THIRD knock (the retry timer fires again before the welcome is processed) is idempotent
+  guestEnd.send({ t: 'hello', name: 'tater' });
+  ok(H.Net.roster.length === 2, 'a repeat knock does not burn a second seat', H.Net.roster.length + ' seats');
+  ok(welcomes === 2, 'it just gets answered again', welcomes + ' welcomes');
+  // and now broadcast actually reaches them
+  let got = 0;
+  guestEnd.on('data', m => { if (m.t === 'start') got++; });
+  H.Net.broadcast({ t: 'start', nightIdx: 1, slots: {} });
+  ok(got === 1, 'and the doors open for them', 'start received');
+}
+
+console.log('\n[9] names');
 {
   H.Net.test.reset();
   room(2);

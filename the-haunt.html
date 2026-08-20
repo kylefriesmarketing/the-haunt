@@ -156,6 +156,53 @@
   };
   D.TIER_MULT = [1, 1.35, 1.8];        // power multiplier by tier
   D.BODY_SCARE = { power: 30, cooldown: 9, energyCost: 9 };  // your pop-out from a peek door
+
+  /* ---------------- scare school (bible §6.2) ----------------
+     Six techniques the trade actually names, learned across the season. Each is a DIFFERENT
+     verb, not a reskin: what you do with your body between scares is the technique.
+       instant — press it in the window (the pop, the slider)
+       charge  — a condition you hold in the room, banked and spent (stalk, creep, scarecrow)
+       hold    — a sustained chase you steer (the chainsaw)
+     `unlock` is the night index it's taught on. */
+  D.TECHNIQUES = [
+    {
+      key: 'pop', name: 'the pop', icon: '!', unlock: 0, kind: 'instant',
+      power: 30, cooldown: 9,
+      desc: 'through the curtain, on the beat. never say boo.',
+      how: 'stand at a peek door and fire in the window.'
+    },
+    {
+      key: 'stalk', name: 'the stalk', icon: '⟶', unlock: 2, kind: 'charge',
+      power: 15, cooldown: 12, chargeRate: 0.55, chargeMax: 3.0, decay: 1.1, behindM: 7.5,
+      desc: 'match their pace, stay behind them, let it get unbearable.',
+      how: 'follow a group from BEHIND. the longer they feel watched, the harder it lands.'
+    },
+    {
+      key: 'creep', name: 'the creep', icon: '◡', unlock: 4, kind: 'charge',
+      power: 17, cooldown: 12, chargeRate: 0.7, chargeMax: 2.6, decay: 2.4, speedMax: 1.3, nearM: 9,
+      desc: 'inhuman-slow, into the light, wrong at every joint.',
+      how: 'move SLOWLY near them. any hurry and the spell breaks.'
+    },
+    {
+      key: 'scarecrow', name: 'the scarecrow', icon: '†', unlock: 6, kind: 'charge',
+      power: 20, cooldown: 16, chargeRate: 0.5, chargeMax: 3.6, decay: 4.0, nearM: 9, mustBeInRoom: true,
+      desc: 'be a prop. be furniture. wait. (the trade calls it the scarecrow routine.)',
+      how: 'stand DEAD STILL in the room with them — not backstage — and do not twitch.'
+    },
+    {
+      key: 'chainsaw', name: 'the chainsaw run', icon: '⚙', unlock: 8, kind: 'hold',
+      power: 9, cooldown: 20, drainPerS: 8, maxHoldS: 4.5, nearM: 7, pushPerS: 0.9, lowPitch: -0.04,
+      desc: 'rev LOW, by the legs. held high it fails and everyone knows it.',
+      how: 'hold E near them and AIM DOWN. it herds them forward — that is the point.'
+    },
+    {
+      key: 'slider', name: 'the slider', icon: '↘', unlock: 11, kind: 'instant',
+      power: 34, cooldown: 22, needSprint: true, wide: true, nearM: 8,
+      desc: 'knee-plates. in at their feet. knott\'s invented it and never apologised.',
+      how: 'SPRINT, then fire — it takes the whole group at once. the showpiece.'
+    }
+  ];
+  D.TECH_STILL = 0.12;               // m/s under which you count as not moving at all
   D.COMEDY_RESET = { cooldown: 16, nerveHeal: 18, primeCost: 25 }; // the walkie gag (Q)
 
   /* timing grades (beat window, seconds from perfect center) */
@@ -759,14 +806,15 @@
       return result;
     }
 
-    function groupInWindow(node) {
+    function groupInWindow(node, mult) {
+      const w = node.window * (mult || 1);
       let best = null, bd = 1e9;
       for (const grp of N.groups) {
         if (grp.mergedInto) continue;
         const lead = leaderS(grp);
         if (lead === null) continue;
         const d = Math.abs(lead - node.s);
-        if (d < node.window && d < bd) { bd = d; best = grp; }
+        if (d < w && d < bd) { bd = d; best = grp; }
       }
       return best;
     }
@@ -775,8 +823,8 @@
       for (const gst of grp.guests) if (!gst.out && !gst.chicken) m = m === null ? gst.s : Math.max(m, gst.s);
       return m;
     }
-    function gradeFor(node) {
-      const grp = groupInWindow(node);
+    function gradeFor(node, wmult) {
+      const grp = groupInWindow(node, wmult);
       if (!grp) return { mult: 0, label: 'MISS', id: 'miss' };
       const toff = (leaderS(grp) - node.s) / D().GUEST.speed; // negative = early
       const adt = Math.abs(toff);
@@ -1312,6 +1360,8 @@
     conn.on('data', msg => {
       if (!msg || typeof msg !== 'object') return;
       if (msg.t === 'hello') {
+        // a repeat hello is a RETRY, not a second monster — answer it again, don't burn a seat
+        if (entry.seat !== null) { try { conn.send({ t: 'welcome', seat: entry.seat, roster: N.roster }); } catch (e) { } return; }
         const seat = nextSeat();
         if (seat === null) { try { conn.send({ t: 'full' }); } catch (e) { } return; }
         entry.seat = seat; entry.name = String(msg.name || 'a monster').slice(0, 18);
@@ -1333,10 +1383,15 @@
       fire('leave', { seat: entry.seat, name: entry.name });
     });
   }
-  function wireGuest(conn) {
+  function wireGuest(conn, onWelcome) {
     conn.on('data', msg => {
       if (!msg || typeof msg !== 'object') return;
-      if (msg.t === 'welcome') { N.seat = msg.seat; N.roster = msg.roster || []; fire('seat', { seat: msg.seat }); }
+      if (msg.t === 'welcome') {
+        const first = N.seat !== msg.seat || !N.active;
+        N.seat = msg.seat; N.roster = msg.roster || []; N.active = true;
+        if (onWelcome) onWelcome();
+        if (first) fire('seat', { seat: msg.seat });
+      }
       else if (msg.t === 'roster') { N.roster = msg.roster || []; fire('roster', N.roster); }
       else if (msg.t === 'full') fire('full', {});
       else fire(msg.t, msg);                                  // start · snap · ev · over · bye
@@ -1386,7 +1441,10 @@
         N.conns = []; rebuildRoster();
         res({ code });
       });
-      peer.on('connection', conn => { conn.on('open', () => wireHost(conn)); });
+      /* ⚠️ wire the data handler the INSTANT the connection appears. Waiting for 'open' loses
+         any hello that arrives first, and a lost hello is a friend who never gets a seat —
+         they see a lobby, the host sees an empty room, and broadcast skips them forever. */
+      peer.on('connection', conn => { wireHost(conn); });
       peer.on('error', e => { N.lastErr = e; if (!settled) { settled = true; rej(e); } });
     }));
   };
@@ -1397,21 +1455,26 @@
     return loadPeer().then(() => new Promise((res, rej) => {
       const peer = new window.Peer({ debug: 0 });
       N.peer = peer;
-      let settled = false;
+      let settled = false, knocking = null;
+      const stopKnocking = () => { if (knocking) { clearInterval(knocking); knocking = null; } };
+      const fail = e => { if (settled) return; settled = true; stopKnocking(); rej(e); };
       peer.on('open', () => {
         const conn = peer.connect(PEER_PREFIX + code, { reliable: true });
+        N.isHost = false; N.code = code;
+        N.name = String(name || 'a monster').slice(0, 18);
+        N.conns = [{ conn }];
+        /* you are NOT in the room until the host seats you — resolving on our own
+           connection open is what made a lost hello look like a successful join. */
+        wireGuest(conn, () => { if (!settled) { settled = true; stopKnocking(); res({ joined: true, seat: N.seat }); } });
         conn.on('open', () => {
-          N.active = true; N.isHost = false; N.code = code;
-          N.name = String(name || 'a monster').slice(0, 18);
-          N.conns = [{ conn }];
-          wireGuest(conn);
-          conn.send({ t: 'hello', name: N.name });
-          settled = true; res({ joined: true });
+          const knock = () => { try { conn.send({ t: 'hello', name: N.name }); } catch (e) { } };
+          knock();
+          knocking = setInterval(() => { if (settled) stopKnocking(); else knock(); }, 700);
         });
-        conn.on('error', e => { if (!settled) { settled = true; rej(e); } });
+        conn.on('error', e => fail(e));
       });
-      peer.on('error', e => { N.lastErr = e; if (!settled) { settled = true; rej(e); } });
-      setTimeout(() => { if (!settled) { settled = true; rej(new Error('nobody answered that code')); } }, 15000);
+      peer.on('error', e => { N.lastErr = e; fail(e); });
+      setTimeout(() => fail(new Error('the barn never answered — check the code, and make sure they\'re still on the lobby screen')), 15000);
     }));
   };
 

@@ -110,6 +110,53 @@
   };
   D.TIER_MULT = [1, 1.35, 1.8];        // power multiplier by tier
   D.BODY_SCARE = { power: 30, cooldown: 9, energyCost: 9 };  // your pop-out from a peek door
+
+  /* ---------------- scare school (bible §6.2) ----------------
+     Six techniques the trade actually names, learned across the season. Each is a DIFFERENT
+     verb, not a reskin: what you do with your body between scares is the technique.
+       instant — press it in the window (the pop, the slider)
+       charge  — a condition you hold in the room, banked and spent (stalk, creep, scarecrow)
+       hold    — a sustained chase you steer (the chainsaw)
+     `unlock` is the night index it's taught on. */
+  D.TECHNIQUES = [
+    {
+      key: 'pop', name: 'the pop', icon: '!', unlock: 0, kind: 'instant',
+      power: 30, cooldown: 9,
+      desc: 'through the curtain, on the beat. never say boo.',
+      how: 'stand at a peek door and fire in the window.'
+    },
+    {
+      key: 'stalk', name: 'the stalk', icon: '⟶', unlock: 2, kind: 'charge',
+      power: 15, cooldown: 12, chargeRate: 0.55, chargeMax: 3.0, decay: 1.1, behindM: 7.5,
+      desc: 'match their pace, stay behind them, let it get unbearable.',
+      how: 'follow a group from BEHIND. the longer they feel watched, the harder it lands.'
+    },
+    {
+      key: 'creep', name: 'the creep', icon: '◡', unlock: 4, kind: 'charge',
+      power: 17, cooldown: 12, chargeRate: 0.7, chargeMax: 2.6, decay: 2.4, speedMax: 1.3, nearM: 9,
+      desc: 'inhuman-slow, into the light, wrong at every joint.',
+      how: 'move SLOWLY near them. any hurry and the spell breaks.'
+    },
+    {
+      key: 'scarecrow', name: 'the scarecrow', icon: '†', unlock: 6, kind: 'charge',
+      power: 20, cooldown: 16, chargeRate: 0.5, chargeMax: 3.6, decay: 4.0, nearM: 9, mustBeInRoom: true,
+      desc: 'be a prop. be furniture. wait. (the trade calls it the scarecrow routine.)',
+      how: 'stand DEAD STILL in the room with them — not backstage — and do not twitch.'
+    },
+    {
+      key: 'chainsaw', name: 'the chainsaw run', icon: '⚙', unlock: 8, kind: 'hold',
+      power: 9, cooldown: 20, drainPerS: 8, maxHoldS: 4.5, nearM: 7, pushPerS: 0.9, lowPitch: -0.04,
+      desc: 'rev LOW, by the legs. held high it fails and everyone knows it.',
+      how: 'hold E near them and AIM DOWN. it herds them forward — that is the point.'
+    },
+    {
+      key: 'slider', name: 'the slider', icon: '↘', unlock: 11, kind: 'instant',
+      power: 34, cooldown: 22, needSprint: true, wide: true, nearM: 8,
+      desc: 'knee-plates. in at their feet. knott\'s invented it and never apologised.',
+      how: 'SPRINT, then fire — it takes the whole group at once. the showpiece.'
+    }
+  ];
+  D.TECH_STILL = 0.12;               // m/s under which you count as not moving at all
   D.COMEDY_RESET = { cooldown: 16, nerveHeal: 18, primeCost: 25 }; // the walkie gag (Q)
 
   /* timing grades (beat window, seconds from perfect center) */
