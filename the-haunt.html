@@ -2627,6 +2627,10 @@
   #flashWhite{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none}
   #cooldowns{position:absolute;right:18px;bottom:70px;font-size:11px;color:#b8a070;text-align:right;text-shadow:0 1px 3px #000}
   #keysHelp{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);font-size:11px;letter-spacing:1px;color:#887650;text-shadow:0 1px 3px #000}
+  #clickHint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:none;text-align:center;
+    font-size:16px;letter-spacing:3px;color:#ffe9b0;background:rgba(12,8,4,.82);border:1px solid #6a5028;
+    border-radius:8px;padding:14px 26px;text-shadow:0 1px 4px #000}
+  #clickHint small{display:block;font-size:11px;letter-spacing:1px;color:#a89878;margin-top:6px}
   table{border-collapse:collapse;width:100%;font-size:12px}
   td,th{padding:5px 8px;border-bottom:1px solid #2c2010;text-align:left;color:#c8b48c}
   th{color:#8a7648;font-weight:normal;letter-spacing:1px}
@@ -2675,6 +2679,7 @@
         <div id="hudTop"></div><div id="hudNight"></div><div id="hudDrawer"></div>
         <div id="walkie"></div><div id="prompt"></div><div id="gradeFlash"></div>
         <div id="crosshair"></div><div id="cooldowns"></div>
+        <div id="clickHint">click to look around<small>wasd moves you either way · E acts · esc for the menu</small></div>
         <div id="keysHelp">wasd move · shift run · mouse look · E act · Q the comedy beat · esc menu</div>
       </div>
       <div id="buildBar"></div>
@@ -2708,6 +2713,9 @@
 
   U.showHud = v => { U.els.hud.style.display = v ? 'block' : 'none'; };
   U.keysHelp = t => { const el = document.getElementById('keysHelp'); if (el) el.textContent = t; };
+  /* a co-op guest is dropped into the night by the WIRE, not by a click, so they arrive with no
+     pointer lock and no way to look around. say so, plainly, until they click. */
+  U.clickHint = show => { const el = document.getElementById('clickHint'); if (el) el.style.display = show ? 'block' : 'none'; };
   U.screen = html => {
     if (html === null) { U.els.screen.style.display = 'none'; return; }
     U.els.screen.style.display = 'flex';
@@ -2924,6 +2932,7 @@
       H.UI.hudNight(GAME.night, GAME.S);
       H.UI.cooldowns(GAME.night);
       H.UI.prompt(H.Player.context(GAME.night, GAME.S.build.slots));
+      H.UI.clickHint(!H.Player.locked);
       if (GAME.night.done) return sting();
     } else if (GAME.state === 'night' && GAME.shadow) {
       /* a guest in somebody else's barn: no sim here, only the wire and your own two feet */
@@ -2937,6 +2946,7 @@
       H.UI.hudNight(GAME.shadow, GAME.S);
       H.UI.cooldowns(GAME.shadow);
       H.UI.prompt(H.Player.context(GAME.shadow, GAME.mpSlots || {}));
+      H.UI.clickHint(!H.Player.locked);
     } else if (GAME.state === 'build3d') {
       H.Player.update(dt);
       H.UI.prompt(H.UI.panelOpen() ? null : H.Player.buildContext(GAME.S.build.slots));

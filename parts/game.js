@@ -83,6 +83,7 @@
       H.UI.hudNight(GAME.night, GAME.S);
       H.UI.cooldowns(GAME.night);
       H.UI.prompt(H.Player.context(GAME.night, GAME.S.build.slots));
+      H.UI.clickHint(!H.Player.locked);
       if (GAME.night.done) return sting();
     } else if (GAME.state === 'night' && GAME.shadow) {
       /* a guest in somebody else's barn: no sim here, only the wire and your own two feet */
@@ -96,6 +97,7 @@
       H.UI.hudNight(GAME.shadow, GAME.S);
       H.UI.cooldowns(GAME.shadow);
       H.UI.prompt(H.Player.context(GAME.shadow, GAME.mpSlots || {}));
+      H.UI.clickHint(!H.Player.locked);
     } else if (GAME.state === 'build3d') {
       H.Player.update(dt);
       H.UI.prompt(H.UI.panelOpen() ? null : H.Player.buildContext(GAME.S.build.slots));
