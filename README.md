@@ -40,10 +40,19 @@ Everything you can do from a chair you can do standing in the room it happens in
 **The tape.** At the drawer count, hit **▶ roll the tape** — the night's biggest scare plays back
 on a slow cinematic arc with VHS grain, timecode and the room's name. Any key stops it.
 
+**The crew (co-op, 2–4).** 🕯️ on the title screen. One of you hosts — it's their barn, their note,
+their build — and reads out a four-letter code; everyone else knocks. Then you're all in the walls
+together: you'll see each other backstage as hooded silhouettes with name tags, you'll hit the same
+corridor at the same time, and a panel will drop on nobody at least once. The host opens the doors
+and everybody comes in; when the last group's out, the crew sees the chalkboard and waits for the
+next night. Drop in mid-show, leave whenever — the barn keeps running either way. **PvE only.**
+
 ## DEV
 
 - `parts/` — all source, plain namespaced scripts (window.HAUNT.*), zero build deps.
-  Load order: rng → data → audio → sim → barn3d → **replay** → view → player → ui → game.
+  Load order: rng → data → audio → sim → barn3d → **replay** → **net** → view → player → ui → game.
+  ⚠️ PeerJS is fetched from a CDN **lazily, only when somebody opens the co-op lobby** — single
+  player keeps its "boots from file:// with no network" property. Don't move that to a `<script>` tag.
 - `node build.mjs` — concatenates parts + three.js r128 UMD into `the-haunt.html`.
   (Dev deps: `npm i three@0.128.0`; for the smoke test also `npm i playwright`.)
   ⚠️ no `node_modules`? recover three.min.js from the shipped file — it's the first inline
@@ -57,6 +66,12 @@ on a slow cinematic arc with VHS grain, timecode and the room's name. Any key st
   these numbers or they don't ship. ALL TUNING LIVES IN `parts/data.js`.**
 - **`node test-replay.mjs` — the tape, 13 checks.** The load-bearing one is #1: a *recorded*
   night must be byte-identical to an unrecorded one. The recorder only ever READS the night.
+- **`node test-net.mjs` — co-op, 34 checks.** Drives the REAL `net.js` over in-memory wires
+  (`Net.test.pair()`, whose `send()` round-trips through JSON like the real transport) against a
+  REAL night. The load-bearing one is §5: **a watched night is byte-identical to an unwatched
+  one** — broadcasting must never perturb the sim. Also proves seats, per-monster cooldowns,
+  snapshot fidelity, that the host refuses junk off the wire, and that a mid-night drop doesn't
+  stall the barn.
 - `node smoke.mjs` — headless-Chromium run of the real build: title → season → walk-the-barn
   build (installs a station in-world) → clipboard → cast call → live night (fires a real body
   scare) → sting → the tape → endings, screenshots, zero-console-error gate.
@@ -92,10 +107,15 @@ workspace law). Live at **https://kylefriesmarketing.github.io/the-haunt/**.
   curtain that parts when you come through, the crowd murmur that DIPS as they close on a scare
   (bible §6.1's setup cue, audible), chatter/laugh/shush blips, and ~40 new walkie lines with
   real triggers (first drop, three-perfect streak, lulls, walk-by runs, per-crew banter, the hour).
-- ⬜ **M6 co-op crew mode** — PeerJS, 2–4, friends man the zones. Sim is already host-authoritative-ready.
+- ✅ **M6 co-op crew mode** — 2–4 monsters in one barn over PeerJS, **host-authoritative** (bible §10:
+  the host runs the one true sim, guests are renderers that send thin intents). Room code, roster,
+  seats capped at 4, per-monster pop/comedy cooldowns, you see each other backstage as hooded
+  silhouettes with name tags, shared walkie feed with attribution, drop-in mid-night, and a guest
+  leaving never touches the barn. PvE only — there is no PvP path in the code.
 
-Not in M5 and deliberately left: replay *theater* is one take per night, held in memory only —
-saving tapes across sessions would need a compact on-disk format and a save-version bump.
+Not shipped and deliberately left: replay *theater* is one take per night, held in memory only
+(saving tapes would need an on-disk format and a save-version bump); co-op guests can't build —
+it's the host's barn, their note, their drawer.
 
 ## TRAPS (read before touching)
 
@@ -121,5 +141,14 @@ saving tapes across sessions would need a compact on-disk format and a save-vers
    closed. Every lock request goes through `Player.lock()`, which swallows the promise rejection.
 10. **Anything on `view.group` that build mode adds, night mode must clear** — `setBuildMode(false)`
    and `setDaylight(false)` are called on BOTH exits (cast call and leaving the walk).
+11. **Co-op is host-authoritative, NOT lockstep.** There is exactly one sim, on the host. A guest
+   holds a `GAME.shadow` — a read-only stand-in shaped enough that the HUD, the prompt and
+   `Player.context` work unchanged — and sends intents. Never add a second sim; never make a
+   guest "predict" a scare. If you find yourself needing determinism across clients, you've
+   drifted from the design.
+12. **The host trusts nothing off the wire.** `hostApplyCmd` checks every id against the real barn
+   before it touches the sim (`test-net.mjs` §6). Keep it that way.
+13. **`Player.actor` is who you are** — `'you'` solo, `'s0'`…`'s3'` in co-op. Cooldowns and scare
+   attribution key off it. If it's wrong, one monster gags another and the sting credits a ghost.
 
 *The barn's been dark since '99. Doors in five. Breathe. — DBD*

@@ -6,7 +6,8 @@
     x: 4, y: 1.62, z: 14, yaw: Math.PI / 2, pitch: 0,
     speed: 3.6, sprint: 5.6,
     keys: {}, locked: false, enabled: false,
-    walls: null, freeRoam: false
+    walls: null, freeRoam: false,
+    actor: 'you'                      // which performer this client IS (co-op seats get their own id)
   };
 
   /* requestPointerLock returns a promise in current chrome; a refusal must not land in the
@@ -86,7 +87,7 @@
     // peek doors (body scare)
     for (const p of D.DOORS.peek) {
       if (near(p.x, p.z, 1.9)) {
-        const ready = !night || night.t >= night.bodyReadyAt;
+        const ready = !night || night.t >= (night.bodyReadyAt[P.actor] || 0);
         return { kind: 'peek', id: p.id, label: ready ? 'E — THE POP (through the curtain)' : 'catching your breath…', ready };
       }
     }

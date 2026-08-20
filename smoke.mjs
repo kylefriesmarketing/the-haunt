@@ -134,6 +134,20 @@ await page.screenshot({ path: 'shot-8-endings.png' });
 const endState = await page.evaluate(() => window.HAUNT.Game.state);
 console.log('ENDINGS STATE:', endState);
 
+// co-op lobby (M6): the menu renders and the code screen accepts input.
+// (the real two-browser handshake is exercised by hand; test-net.mjs owns the protocol.)
+await page.evaluate(() => { window.HAUNT.Game.S.nights = 0; });
+await page.reload(); await page.waitForTimeout(1200);
+const coop = await page.evaluate(() => {
+  document.getElementById('btnCoop').click();
+  const hasName = !!document.getElementById('mpName');
+  document.getElementById('mpJoin').click();
+  const hasCode = !!document.getElementById('mpCode');
+  return { state: window.HAUNT.Game.state, hasName, hasCode, netLoaded: typeof window.HAUNT.Net === 'object' };
+});
+console.log('CO-OP LOBBY:', JSON.stringify(coop));
+await page.screenshot({ path: 'shot-9-coop.png' });
+
 console.log('CONSOLE ERRORS:', errors.length ? errors.slice(0, 12) : 'none');
 await browser.close();
 process.exit(errors.length ? 1 : 0);

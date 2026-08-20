@@ -83,7 +83,9 @@
       events: [],            // drained by view/audio each frame
       tally: { flinch: 0, scream: 0, gotem: 0, dropped: 0, melted: 0, walkby: 0, complaints: 0, rescues: 0, chickened: 0, delight: 0, polaroids: 0, bounty: false, ghost: 0, conga: 0, alarms: 0 },
       drawer: 0, comped: 0,
-      bodyReadyAt: 0, comedyReadyAt: 0,
+      /* per-ACTOR cooldowns: in co-op two monsters must not share one breath (bible §10).
+         keyed by actor id; 'you' is the local/solo performer. */
+      bodyReadyAt: {}, comedyReadyAt: {},
       ghostPlanned: null, lastSpawnT: -999,
       bestScare: null
     };
@@ -233,7 +235,7 @@
     }
 
     /* ---- public triggers (player + crew call these) ---- */
-    N.triggerStation = function (slotId, byCrew) {
+    N.triggerStation = function (slotId, byCrew, who) {
       const st = N.stations[slotId];
       if (!st || st.broken || N.alarm.active) return { ok: false };
       if (N.t < st.readyAt) return { ok: false, cooldown: true };
@@ -245,8 +247,9 @@
       }
       if (grade.mult === 0) { N.tally.walkby++; N.emit('walkby', { slot: slotId, node: st.node.id }); N.groupPrimeLoss(st.node); return { ok: true, grade }; }
       const power = st.def.power * D().TIER_MULT[st.tier - 1];
-      const res = applyScare(st.node, byCrew ? 'crew' : 'you', power, grade.mult, {});
-      N.emit('grade', { label: grade.label, id: grade.id, slot: slotId, byCrew: byCrew || null });
+      const src = byCrew ? 'crew' : (who && who !== 'you' ? 'hand:' + who : 'you');
+      const res = applyScare(st.node, src, power, grade.mult, {});
+      N.emit('grade', { label: grade.label, id: grade.id, slot: slotId, byCrew: byCrew || null, who: who || 'you' });
       return { ok: true, grade, res };
     };
     N.groupPrimeLoss = function (node) {
@@ -257,21 +260,23 @@
       for (const grp of N.groups) { if (grp.mergedInto) continue; const l = leaderS(grp); if (l === null) continue; const d = Math.abs(l - node.s); if (d < bd) { bd = d; best = grp; } }
       return best;
     }
-    N.triggerBody = function (peekId) {
-      if (N.t < N.bodyReadyAt || N.alarm.active) return { ok: false };
+    N.triggerBody = function (peekId, who) {
+      who = who || 'you';
+      if (N.t < (N.bodyReadyAt[who] || 0) || N.alarm.active) return { ok: false };
       const peek = D().DOORS.peek.find(p => p.id === peekId);
       if (!peek) return { ok: false };
-      N.bodyReadyAt = N.t + D().BODY_SCARE.cooldown;
+      N.bodyReadyAt[who] = N.t + D().BODY_SCARE.cooldown;
       const node = nodeById[peek.node];
       const grade = gradeFor(node);
-      if (grade.mult === 0) { N.tally.walkby++; N.emit('walkby', { node: node.id, body: true }); return { ok: true, grade }; }
-      const res = applyScare(node, 'you-body', D().BODY_SCARE.power, grade.mult, { fromBehind: true });
-      N.emit('grade', { label: grade.label, id: grade.id, body: true });
+      if (grade.mult === 0) { N.tally.walkby++; N.emit('walkby', { node: node.id, body: true, who }); return { ok: true, grade }; }
+      const res = applyScare(node, who === 'you' ? 'you-body' : 'body:' + who, D().BODY_SCARE.power, grade.mult, { fromBehind: true });
+      N.emit('grade', { label: grade.label, id: grade.id, body: true, who });
       return { ok: true, grade, res };
     };
-    N.triggerComedy = function () {
-      if (N.t < N.comedyReadyAt) return { ok: false };
-      N.comedyReadyAt = N.t + D().COMEDY_RESET.cooldown;
+    N.triggerComedy = function (who) {
+      who = who || 'you';
+      if (N.t < (N.comedyReadyAt[who] || 0)) return { ok: false };
+      N.comedyReadyAt[who] = N.t + D().COMEDY_RESET.cooldown;
       for (const grp of N.groups) {
         if (grp.mergedInto) continue;
         grp.prime = Math.max(0, grp.prime - D().COMEDY_RESET.primeCost);

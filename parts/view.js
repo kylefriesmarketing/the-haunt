@@ -5,6 +5,7 @@
   const V = {};
   let scene, camera, renderer, clock;
   let wallsGroup, guestMeshes = {}, stationMeshes = {}, nodeRings = {}, roomLights = {}, flickerT = 0;
+  let crewMeshes = {};                   // the other humans in the walls (co-op)
   let alarmMode = false, strobeOff = false, reducedMotion = false;
   let polaroidWallTex = null, polaroidWallCtx = null;
   let ghostPulse = null;
@@ -509,34 +510,28 @@
     return { grp, face, bar, bctx, btex, s, headBase: 1.32 * s };
   }
 
-  V.syncGuests = function (night, xray) {
+  /* THE one place guests get drawn. Three callers feed it the same shape:
+     the live sim (syncGuests), the tape (replayFrame), and the wire (a co-op guest's snapshot).
+     entry: { id, arch, x, y, z, ry, tilt, face, bob?, nerve?, distress? } */
+  V.renderGuests = function (list, xray) {
     const seen = {};
-    for (const gst of night.guests) {
-      if (gst.out) continue;
-      seen[gst.id] = true;
-      let m = guestMeshes[gst.id];
-      if (!m) m = guestMeshes[gst.id] = makeGuestMesh(gst.arch);
-      const p = night.guestPos(gst);
-      m.grp.position.x = p.x; m.grp.position.z = p.z;
-      m.grp.rotation.y = Math.atan2(p.dirX, p.dirZ);
-      // reaction posture — the ONE definition, shared with the tape (replay.js)
-      const po = H.Replay.poseOf(gst);
-      const face = po.face, tilt = po.tilt;
-      let yOff = po.yOff;
-      const frac = gst.nerve / gst.pool;
-      if (reducedMotion) yOff *= 0.4;
-      m.grp.position.y = yOff + po.ly;
-      m.grp.rotation.x = tilt;
-      m.face.material.map = FACES[face];
-      // nerve bar (backstage vision only)
-      m.bar.visible = !!xray;
-      if (xray) {
-        const w = Math.max(0, Math.min(1, frac));
+    for (const g of list) {
+      seen[g.id] = true;
+      let m = guestMeshes[g.id];
+      if (!m) m = guestMeshes[g.id] = makeGuestMesh(g.arch || 'chain');
+      const bob = reducedMotion ? (g.bob || 0) * 0.4 : (g.bob || 0);
+      m.grp.position.set(g.x, bob + (g.y || 0), g.z);
+      m.grp.rotation.y = g.ry; m.grp.rotation.x = g.tilt || 0;
+      m.face.material.map = FACES[g.face] || FACES.calm;
+      const showBar = !!xray && g.nerve !== undefined && g.nerve !== null;
+      m.bar.visible = showBar;
+      if (showBar) {
+        const w = Math.max(0, Math.min(1, g.nerve));
         m.bctx.clearRect(0, 0, 64, 10);
         m.bctx.fillStyle = 'rgba(10,8,4,0.8)'; m.bctx.fillRect(0, 0, 64, 10);
         m.bctx.fillStyle = w > 0.5 ? '#69d84a' : w > 0.26 ? '#e8c23a' : '#e84a3a';
         m.bctx.fillRect(1, 1, 62 * w, 8);
-        if (gst.state === 'distress') { m.bctx.fillStyle = '#fff'; m.bctx.fillRect(0, 0, 64, 10); }
+        if (g.distress) { m.bctx.fillStyle = '#fff'; m.bctx.fillRect(0, 0, 64, 10); }
         m.btex.needsUpdate = true;
       }
     }
@@ -545,23 +540,76 @@
     }
   };
 
+  /* the live sim's view of the room */
+  V.syncGuests = function (night, xray) {
+    const list = [];
+    for (const gst of night.guests) {
+      if (gst.out) continue;
+      const p = night.guestPos(gst);
+      const po = H.Replay.poseOf(gst);
+      list.push({
+        id: gst.id, arch: gst.arch, x: p.x, y: po.ly, z: p.z,
+        ry: Math.atan2(p.dirX, p.dirZ), tilt: po.tilt, face: po.face, bob: po.yOff,
+        nerve: gst.nerve / gst.pool, distress: gst.state === 'distress'
+      });
+    }
+    V.renderGuests(list, xray);
+  };
+
   V.clearGuests = function () {
     for (const id of Object.keys(guestMeshes)) { scene.remove(guestMeshes[id].grp); delete guestMeshes[id]; }
   };
 
+  /* ---------- the other monsters (co-op): silhouette first, name over the hood ---------- */
+  function makeCrewMesh(name) {
+    const grp = new THREE.Group();
+    const cloth = new THREE.MeshLambertMaterial({ color: 0x2a3226, emissive: 0x0a0e08, emissiveIntensity: 0.5 });
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.42, 1.25, 7), cloth);
+    body.position.y = 0.62; grp.add(body);
+    const hood = new THREE.Mesh(new THREE.SphereGeometry(0.27, 9, 8), cloth);
+    hood.position.y = 1.4; grp.add(hood);
+    const dark = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 7), new THREE.MeshBasicMaterial({ color: 0x070806 }));
+    dark.position.set(0, 1.38, 0.13); grp.add(dark);          // where the face isn't
+    const glove = new THREE.MeshLambertMaterial({ color: 0x46503a });
+    for (const s of [-1, 1]) {
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.5, 0.13), glove);
+      arm.position.set(s * 0.3, 0.82, 0.06); arm.rotation.z = s * 0.18; grp.add(arm);
+      for (let i = 0; i < 3; i++) {
+        const c = new THREE.Mesh(new THREE.ConeGeometry(0.017, 0.06, 4), new THREE.MeshLambertMaterial({ color: 0xd8cfb0 }));
+        c.position.set(s * 0.3 + (i - 1) * 0.04, 0.53, 0.06); c.rotation.x = Math.PI; grp.add(c);
+      }
+    }
+    const tag = labelSprite(name, null, '#9fd8a8');
+    tag.scale.set(1.5, 0.42, 1); tag.position.y = 2.0; grp.add(tag);
+    scene.add(grp);
+    return { grp, tag };
+  }
+
+  V.syncCrew = function (list) {
+    const seen = {};
+    for (const c of list || []) {
+      seen[c.id] = true;
+      let m = crewMeshes[c.id];
+      if (!m) m = crewMeshes[c.id] = makeCrewMesh(c.name || 'a monster');
+      m.grp.position.set(c.x, 0, c.z);
+      m.grp.rotation.y = c.yaw || 0;
+    }
+    for (const id of Object.keys(crewMeshes)) {
+      if (!seen[id]) {
+        const m = crewMeshes[id];
+        if (m.tag && m.tag.material.map) m.tag.material.map.dispose();
+        scene.remove(m.grp); delete crewMeshes[id];
+      }
+    }
+  };
+  V.clearCrew = function () { V.syncCrew([]); };
+
   /* ---------- the tape: rebuild the room from a recorded frame ---------- */
   V.replayFrame = function (take, guests) {
-    const seen = {};
-    for (const gr of guests) {
-      seen[gr.id] = true;
-      let m = guestMeshes[gr.id];
-      if (!m) m = guestMeshes[gr.id] = makeGuestMesh(take.roster[gr.id] || 'chain');
-      m.grp.position.set(gr.x, gr.y, gr.z);
-      m.grp.rotation.y = gr.ry; m.grp.rotation.x = gr.tilt;
-      m.face.material.map = FACES[gr.face] || FACES.calm;
-      m.bar.visible = false;
-    }
-    for (const id of Object.keys(guestMeshes)) if (!seen[id]) { scene.remove(guestMeshes[id].grp); delete guestMeshes[id]; }
+    V.renderGuests(guests.map(gr => ({
+      id: gr.id, arch: take.roster[gr.id] || 'chain',
+      x: gr.x, y: gr.y, z: gr.z, ry: gr.ry, tilt: gr.tilt, face: gr.face
+    })), false);
     for (const id of Object.keys(nodeRings)) nodeRings[id].material.opacity = 0;   // no HUD furniture on the tape
   };
 
@@ -709,30 +757,26 @@
   }
 
   /* ---------- per-frame ---------- */
-  V.update = function (night, player, buildSlots, dtIn) {
+  V.update = function (night, player, buildSlots, dtIn, deltas) {
     const dt = dtIn === undefined ? clock.getDelta() : (clock.getDelta(), dtIn);   // keep the clock in step either way
     flickerT += dt;
     const D = H.DATA;
-    // beat rings
-    if (night) {
-      for (const n of night.nodes) {
+    // beat rings — driven by node deltas so a co-op guest reads the same beat off the wire
+    if (deltas) {
+      for (const n of D.NODES) {
         const ring = nodeRings[n.id]; if (!ring) continue;
-        let best = null;
-        for (const grp of night.groups) {
-          if (grp.mergedInto) continue;
-          let lead = null;
-          for (const gg of grp.guests) if (!gg.out && !gg.chicken) lead = lead === null ? gg.s : Math.max(lead, gg.s);
-          if (lead === null) continue;
-          const d = n.s - lead; // >0: approaching
-          if (d > -n.window && d < n.window * 2.2) { if (best === null || Math.abs(d) < Math.abs(best)) best = d; }
+        let best = deltas[n.id];
+        if (best === null || best === undefined || best <= -n.window || best >= n.window * 2.2) {
+          ring.material.opacity += (0 - ring.material.opacity) * 0.2; continue;
         }
-        if (best === null) { ring.material.opacity += (0 - ring.material.opacity) * 0.2; continue; }
         const closeness = 1 - Math.min(1, Math.abs(best) / (n.window * 2));
         ring.material.opacity = 0.15 + closeness * 0.75;
         const sc = 1 + Math.max(0, best) * 0.45;
         ring.scale.set(sc, sc, 1);
         ring.material.color.setHex(Math.abs(best) < 0.6 ? 0xffffff : 0xffcf5a);
       }
+    }
+    if (night) {
       // station LEDs
       for (const [slotId, sm] of Object.entries(stationMeshes)) {
         const st = night.stations[slotId];

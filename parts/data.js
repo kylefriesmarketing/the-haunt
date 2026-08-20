@@ -240,6 +240,9 @@
   D.HANDS = { popS: 0.78, leverS: 0.42 };
   D.WALKIE_GAP = 3.4;              // minimum seconds between ambient walkie lines (the feed is warmth, not spam)
 
+  /* ---------------- M6: co-op crew mode (bible §10) ---------------- */
+  D.NET = { snapHz: 15, posHz: 10, maxSeats: 4 };
+
   /* ---------------- voice — lowercase, deadpan, warm ---------------- */
   D.VOICE = {
     walkboys: ['copy.', 'on it.', 'resetting.', 'in position.', 'they’re coming to you.'],

@@ -9,7 +9,9 @@
     /* M5 bookkeeping — all view/voice side, none of it touches the sim */
     lastCue: 0, chatT: 3, voiceT: 0, perfectRun: 0, walkbyRun: 0, firstDrop: false,
     quietT: 0, saidLate: false, saidLast: false, chickenSeen: 0, replay: null, stingData: null,
-    wantLock: false, lockAt: 0
+    wantLock: false, lockAt: 0,
+    /* co-op (M6): shadow = a guest's read-only stand-in for the host's night */
+    shadow: null, deltas: {}, crew: [], crewPos: {}, snapT: 0, posT: 0, mpSlots: null, mpName: ''
   };
 
   /* ---------------- save ---------------- */
@@ -65,19 +67,35 @@
      suspends requestAnimationFrame) can drive the whole game a frame at a time. */
   GAME.step = function (dt) {
     if (GAME.state === 'night' && GAME.night) {
+      /* the barn's owner: the one true sim runs here */
       H.Player.update(dt);
       GAME.night.tick(dt);
       drainEvents();
-      beatCue(dt);
+      GAME.deltas = nodeDeltas(GAME.night);
+      beatCue(dt, GAME.deltas);
       H.Replay.record(GAME.night, dt);
-      crowdAudio(dt);
-      ambientVoice(dt);
+      crowdAudio(dt, GAME.night);
+      ambientVoice(dt, GAME.night);
+      netHostTick(dt);
       const xray = H.Barn.inSpine(H.Player.x, H.Player.z);
       H.View.syncGuests(GAME.night, xray);
+      H.View.syncCrew(otherCrew());
       H.UI.hudNight(GAME.night, GAME.S);
       H.UI.cooldowns(GAME.night);
       H.UI.prompt(H.Player.context(GAME.night, GAME.S.build.slots));
       if (GAME.night.done) return sting();
+    } else if (GAME.state === 'night' && GAME.shadow) {
+      /* a guest in somebody else's barn: no sim here, only the wire and your own two feet */
+      H.Player.update(dt);
+      beatCue(dt, GAME.deltas || {});
+      crowdAudio(dt, GAME.shadow);
+      netGuestTick(dt);
+      const xray = H.Barn.inSpine(H.Player.x, H.Player.z);
+      H.View.renderGuests(GAME.shadow.guests, xray);
+      H.View.syncCrew(otherCrew());
+      H.UI.hudNight(GAME.shadow, GAME.S);
+      H.UI.cooldowns(GAME.shadow);
+      H.UI.prompt(H.Player.context(GAME.shadow, GAME.mpSlots || {}));
     } else if (GAME.state === 'build3d') {
       H.Player.update(dt);
       H.UI.prompt(H.UI.panelOpen() ? null : H.Player.buildContext(GAME.S.build.slots));
@@ -87,12 +105,12 @@
       H.Player.update(dt);
       H.UI.prompt(null);
     }
-    H.View.update(GAME.night, H.Player, GAME.S ? GAME.S.build.slots : {}, dt);
+    H.View.update(GAME.night || GAME.shadow, H.Player, GAME.S ? GAME.S.build.slots : {}, dt, GAME.deltas);
   };
 
   /* the crowd you hear through the wall — and the DIP that means they're nearly on you (bible §6.1) */
-  function crowdAudio(dt) {
-    const N = GAME.night, C = D().CHATTER;
+  function crowdAudio(dt, N) {
+    const C = D().CHATTER;
     let level = 0;
     for (const gst of N.guests) {
       if (gst.out) continue;
@@ -107,6 +125,144 @@
       GAME.chatT = C.blipGap[0] + Math.random() * (C.blipGap[1] - C.blipGap[0]);
       if (level > 0.12 && !N.alarm.active) H.Audio.chatterBlip(GAME.lastCue > 0.55 ? 'shush' : 'talk');
     }
+  }
+
+  /* ---------------- co-op: the other monsters (M6) ---------------- */
+  /* everyone in the barn except you — the host knows all seats, a guest learns them from the wire */
+  function otherCrew() {
+    if (!H.Net.active) return [];
+    if (H.Net.isHost) {
+      return Object.keys(GAME.crewPos).map(seat => {
+        const p = GAME.crewPos[seat];
+        return { id: 's' + seat, name: p.name, x: p.x, z: p.z, yaw: p.yaw };
+      });
+    }
+    return (GAME.crew || []).filter(c => c.id !== 's' + H.Net.seat);
+  }
+  function crewList() {          // host-side: everyone, INCLUDING the host, for broadcasting
+    const out = [{ id: 's0', name: H.Net.roster.length ? H.Net.roster[0].name : 'the boss', x: r2(H.Player.x), z: r2(H.Player.z), yaw: r2(H.Player.yaw) }];
+    for (const seat of Object.keys(GAME.crewPos)) {
+      const p = GAME.crewPos[seat];
+      out.push({ id: 's' + seat, name: p.name, x: p.x, z: p.z, yaw: p.yaw });
+    }
+    return out;
+  }
+  const r2 = v => Math.round(v * 100) / 100;
+
+  function netHostTick(dt) {
+    if (!H.Net.active || !H.Net.isHost) return;
+    GAME.snapT -= dt;
+    if (GAME.snapT > 0) return;
+    GAME.snapT = 1 / D().NET.snapHz;
+    const snap = H.Net.snapshot(GAME.night, GAME.deltas, crewList());
+    snap.ck = GAME.night.clock();
+    H.Net.broadcast(snap);
+  }
+  function netGuestTick(dt) {
+    GAME.posT -= dt;
+    if (GAME.posT > 0) return;
+    GAME.posT = 1 / D().NET.posHz;
+    H.Net.pos(H.Player.x, H.Player.z, H.Player.yaw);
+  }
+
+  /* a guest's stand-in for the night: enough shape that the HUD, the prompt and the
+     context checks all work unchanged. it holds no simulation — only the last snapshot. */
+  function makeShadow(start) {
+    const nd = D().SEASON.nights[start.nightIdx] || D().SEASON.nights[0];
+    const sh = {
+      t: 0, done: false, nightDef: nd, softScare: !!start.softScare,
+      guests: [], stations: {}, drawer: 0, spawned: 0, _clock: '7:00 pm',
+      tally: { flinch: 0, scream: 0, gotem: 0, dropped: 0, melted: 0, walkby: 0, complaints: 0, rescues: 0, chickened: 0, delight: 0, polaroids: 0, bounty: false, ghost: 0, conga: 0, alarms: 0 },
+      alarm: { active: false }, bodyReadyAt: {}, comedyReadyAt: {},
+      guestPos(gst) { return { x: gst.x, z: gst.z, dirX: 0, dirZ: 1 }; },
+      clock() { return sh._clock; }
+    };
+    for (const slot of D().SLOTS) {
+      const b = start.slots[slot.id];
+      if (b && b.type) sh.stations[slot.id] = { readyAt: 0, broken: !!b.broken, type: b.type, tier: b.tier || 1 };
+    }
+    return sh;
+  }
+  function applySnap(snap) {
+    const sh = GAME.shadow; if (!sh) return;
+    sh.t = snap.tt; sh.tally = snap.tal; sh.drawer = snap.dr; sh.spawned = snap.sp;
+    sh.alarm.active = !!snap.al; sh.bodyReadyAt = snap.bd || {}; sh.comedyReadyAt = snap.cd || {};
+    sh._clock = snap.ck || sh._clock;
+    sh.guests = H.Net.readGuests(snap);
+    for (const id of Object.keys(sh.stations)) sh.stations[id].readyAt = sh.t + (snap.st[id] || 0);
+    GAME.deltas = snap.nd || {};
+    GAME.crew = snap.crew || [];
+  }
+
+  /* every message from the wire lands here */
+  function onNet(type, msg) {
+    if (type === 'join') {
+      H.UI.toast(`${msg.name} is in the walls.`);
+      walkieSay(`${msg.name} just came through the back door.`, true);
+      if (GAME.state === 'mplobby') mpLobbyScreen();
+      // walked in mid-show? hand THEM the night, not the whole room again
+      else if (GAME.night && !GAME.night.done) {
+        H.Net.toSeat(msg.seat, {
+          t: 'start', nightIdx: GAME.S.nightIdx, slots: GAME.S.build.slots,
+          softScare: !!GAME.S.softNext, label: GAME.night.nightDef.label
+        });
+      }
+    }
+    else if (type === 'leave') { H.UI.toast(`${msg.name} left.`); delete GAME.crewPos[msg.seat]; if (GAME.state === 'mplobby') mpLobbyScreen(); }
+    else if (type === 'roster') { if (GAME.state === 'mplobby') mpLobbyScreen(); }
+    else if (type === 'seat') { H.Player.actor = H.Net.actorOf(msg.seat); if (GAME.state === 'mplobby') mpLobbyScreen(); }
+    else if (type === 'full') { H.UI.toast('that barn is full. four monsters is the fire code.'); }
+    else if (type === 'cmd') hostApplyCmd(msg.seat, msg.c);
+    else if (type === 'pos') {
+      const r = H.Net.roster.find(x => x.seat === msg.seat);
+      GAME.crewPos[msg.seat] = { x: msg.x, z: msg.z, yaw: msg.yaw, name: r ? r.name : 'a monster' };
+    }
+    else if (type === 'start') guestStart(msg);
+    else if (type === 'snap') applySnap(msg);
+    else if (type === 'ev') handleEvents(msg.evs || [], GAME.shadow);
+    else if (type === 'over') guestNightOver(msg);
+    else if (type === 'hostgone' || type === 'bye') {
+      H.UI.toast('the barn went dark — the host dropped.');
+      leaveMp();
+    }
+  }
+
+  /* the host trusts NOTHING off the wire: every id is checked against the real barn */
+  function hostApplyCmd(seat, c) {
+    const N = GAME.night;
+    if (!N || N.done || !c) return;
+    const who = H.Net.actorOf(seat);
+    if (c.k === 'station') {
+      if (!N.stations[c.id]) return;
+      N.triggerStation(c.id, false, who);
+    } else if (c.k === 'body') {
+      if (!D().DOORS.peek.some(p => p.id === c.id)) return;
+      N.triggerBody(c.id, who);
+    } else if (c.k === 'comedy') {
+      N.triggerComedy(who);
+    } else if (c.k === 'rescue') {
+      N.rescue(c.id);
+    }
+  }
+
+  /* what the local player's E key does, wherever they're standing */
+  function doStation(id) {
+    H.View.leverHand(); H.Audio.lever();
+    if (GAME.night) GAME.night.triggerStation(id, false, H.Player.actor);
+    else H.Net.cmd({ k: 'station', id });
+  }
+  function doBody(peekId) {
+    H.Audio.pop(); H.Audio.cloth(); H.View.popHands(peekId);
+    if (GAME.night) GAME.night.triggerBody(peekId, H.Player.actor);
+    else H.Net.cmd({ k: 'body', id: peekId });
+  }
+  function doComedy() {
+    if (GAME.night) GAME.night.triggerComedy(H.Player.actor);
+    else H.Net.cmd({ k: 'comedy' });
+  }
+  function doRescue(id) {
+    if (GAME.night) GAME.night.rescue(id);
+    else H.Net.cmd({ k: 'rescue', id });
   }
 
   /* ---------------- the tape (M5 replay theater) ---------------- */
@@ -142,21 +298,35 @@
     stingCard();
   }
 
-  /* the audible beat: the nearest hot node ticks faster as the group closes. eyes-shut playable. */
-  function beatCue(dt) {
-    const N = GAME.night;
-    let best = null;
+  /* how far the nearest group's leader is from each node, along the route.
+     ONE map drives the beat rings, the audible cue, and what goes out on the wire — so a
+     co-op guest sees and hears exactly the beat the host does. */
+  function nodeDeltas(N) {
+    const out = {};
     for (const n of N.nodes) {
-      const dx = H.Player.x - n.pos[0], dz = H.Player.z - n.pos[1];
-      if (dx * dx + dz * dz > 140) continue;
+      let best = null;
       for (const grp of N.groups) {
         if (grp.mergedInto) continue;
         let lead = null;
         for (const gg of grp.guests) if (!gg.out && !gg.chicken) lead = lead === null ? gg.s : Math.max(lead, gg.s);
         if (lead === null) continue;
         const d = n.s - lead;
-        if (d > -2 && d < 9) { const u = 1 - Math.min(1, Math.abs(d) / 9); if (!best || u > best) best = u; }
+        if (best === null || Math.abs(d) < Math.abs(best)) best = Math.round(d * 100) / 100;
       }
+      out[n.id] = best;
+    }
+    return out;
+  }
+
+  /* the audible beat: the nearest hot node ticks faster as the group closes. eyes-shut playable. */
+  function beatCue(dt, deltas) {
+    let best = null;
+    for (const n of D().NODES) {
+      const d = deltas[n.id];
+      if (d === null || d === undefined) continue;
+      const dx = H.Player.x - n.pos[0], dz = H.Player.z - n.pos[1];
+      if (dx * dx + dz * dz > 140) continue;
+      if (d > -2 && d < 9) { const u = 1 - Math.min(1, Math.abs(d) / 9); if (!best || u > best) best = u; }
     }
     GAME.lastCue = best === null ? Math.max(0, GAME.lastCue - dt * 1.6) : best;
     if (best === null) return;
@@ -173,8 +343,8 @@
   const rnd = arr => arr[Math.floor(Math.random() * arr.length)];
 
   /* things the feed notices on its own: the lulls, the hour, the quiet door */
-  function ambientVoice(dt) {
-    const N = GAME.night, V = D().VOICE;
+  function ambientVoice(dt, N) {
+    const V = D().VOICE;
     GAME.quietT += dt;
     const inside = N.guests.some(gst => !gst.out);
     if (GAME.quietT > 45 && inside && !N.alarm.active) { GAME.quietT = 0; walkieSay(rnd(V.quiet)); }
@@ -185,21 +355,34 @@
 
   /* ---------------- event → feel ---------------- */
   function drainEvents() {
-    const N = GAME.night, V = D().VOICE;
-    for (const ev of N.events) {
+    const N = GAME.night;
+    // co-op: the raw events go out on the wire and every client renders its OWN feel layer
+    // from them, so nobody ships walkie prose across the network.
+    if (H.Net.active && H.Net.isHost && N.events.length) H.Net.broadcast({ t: 'ev', evs: N.events.slice() });
+    handleEvents(N.events, N);
+    N.events.length = 0;
+  }
+
+  function handleEvents(events, N) {
+    const V = D().VOICE;
+    if (!N) return;
+    for (const ev of events) {
       switch (ev.type) {
-        case 'grade':
-          H.UI.grade(ev.label, ev.id); if (!ev.byCrew) H.Audio.grade(ev.id);
+        case 'grade': {
+          const mine = !ev.who || ev.who === H.Player.actor;
+          if (mine) { H.UI.grade(ev.label, ev.id); if (!ev.byCrew) H.Audio.grade(ev.id); }
+          else if (ev.id === 'perfect') walkieSay(`${H.Net.nameOf(ev.who)} hit it on the beat.`);
           if (ev.id === 'perfect') {
             GAME.perfectRun++; GAME.walkbyRun = 0;
             if (GAME.perfectRun === 3) walkieSay(rnd(V.streak), true);
-            else if (Math.random() < 0.22) walkieSay(rnd(V.perfect));
+            else if (mine && Math.random() < 0.22) walkieSay(rnd(V.perfect));
           } else GAME.perfectRun = 0;
           break;
+        }
         case 'scare': {
           const kind = ev.melted ? 'melt' : ev.dropped ? 'dropped' : ev.gotem ? 'gotem' : ev.screams ? 'scream' : 'flinch';
           H.Audio.scareHit(kind);
-          H.Replay.mark(N, ev);                       // the tape decides for itself what was worth keeping
+          if (GAME.night) H.Replay.mark(N, ev);       // only the barn's owner keeps a tape
           GAME.quietT = 0; GAME.walkbyRun = 0;
           if (ev.dropped && !GAME.firstDrop) { GAME.firstDrop = true; walkieSay(rnd(V.firstDrop), true); }
           else if (ev.dropped) walkieSay(rnd(V.dropped));
@@ -242,7 +425,6 @@
         case 'distract': if (Math.random() < 0.35) walkieSay(rnd(V.crew.priya)); break;
       }
     }
-    N.events.length = 0;
   }
 
   /* ---------------- screens ---------------- */
@@ -261,6 +443,7 @@
       <div style="margin-top:18px">
         ${cont ? '<button class="btn primary" id="btnContinue">continue the season (night ' + (s.nightIdx + 1) + ')</button>' : ''}
         <button class="btn ${cont ? '' : 'primary'}" id="btnNew">${cont ? 'start over' : 'sign the note'}</button>
+        <button class="btn" id="btnCoop">🕯️ the crew (co-op, 2–4)</button>
         <button class="btn ghostbtn" id="btnSettings">settings</button>
       </div>
       <p style="font-size:11px;color:#5a4c34;margin-top:16px">every guest walks out laughing. that’s the whole religion.</p>`);
@@ -269,6 +452,7 @@
       if (cont && !confirm('start the season over? the wall of got-got comes down.')) return;
       GAME.S = freshSeason(); save(); intro();
     });
+    H.UI.on('btnCoop', mpMenu);
     H.UI.on('btnSettings', () => settings(title));
   }
 
@@ -610,6 +794,145 @@
     document.getElementById('bmSeason').onclick = () => { H.Audio.click(); leaveBuildWalk(); seasonHub(); };
   }
 
+  /* ---------------- co-op: the lobby (M6) ---------------- */
+  function myName() {
+    if (GAME.mpName) return GAME.mpName;
+    try { return localStorage.getItem('haunt-name') || ''; } catch (e) { return ''; }
+  }
+  function saveName(n) {
+    GAME.mpName = n;
+    try { localStorage.setItem('haunt-name', n); } catch (e) { }
+  }
+
+  function mpMenu() {
+    GAME.state = 'mpmenu';
+    H.UI.showHud(false); H.Player.enabled = false;
+    H.UI.screen(`
+      <h1 style="font-size:26px">the crew</h1>
+      <h2>two to four monsters · one barn · one long night</h2>
+      <p>somebody hosts — it's their barn, their note, their build. everybody else gets in the
+      walls with them. you'll see each other backstage, you'll hit the same corridor at the same
+      time, and a panel will drop on nobody at least once. that's the job.</p>
+      <p class="warn">house rules travel: nobody gets touched, nobody gets harmed, everybody walks
+      out laughing. there is no versus mode and there never will be.</p>
+      <div class="stat">what do they call you in the dark?
+        <input id="mpName" maxlength="18" value="${myName().replace(/"/g, '')}" placeholder="a monster"
+        style="background:#241808;color:#f0e0b8;border:1px solid #5a4420;border-radius:4px;padding:5px 8px;font-family:inherit;width:180px"></div>
+      <div style="margin-top:14px">
+        <button class="btn primary" id="mpHost">open your barn (host)</button>
+        <button class="btn" id="mpJoin">walk into someone else's</button>
+        <button class="btn ghostbtn" id="mpBack">back</button>
+      </div>
+      <p style="font-size:11px;color:#5a4c34;margin-top:14px">co-op needs the internet for the handshake; single player never does.</p>`);
+    H.UI.on('mpHost', () => {
+      const n = (document.getElementById('mpName').value || 'the boss').slice(0, 18);
+      saveName(n);
+      H.UI.screen(`<h2>opening the barn…</h2><p>waking the phone line.</p>`);
+      H.Net.host(n, onNet).then(() => mpLobbyScreen())
+        .catch(e => { H.UI.screen(`<h2>the phone line's dead</h2><p>${String(e && e.message || e)}</p>
+          <p style="color:#6a5c40">co-op needs to reach the internet once, to introduce the two browsers. the barn still runs fine alone.</p>
+          <button class="btn primary" id="mpErrBack">back</button>`); H.UI.on('mpErrBack', mpMenu); });
+    });
+    H.UI.on('mpJoin', () => {
+      const n = (document.getElementById('mpName').value || 'a monster').slice(0, 18);
+      saveName(n);
+      H.UI.screen(`
+        <h2>what's the code?</h2>
+        <p>four letters. the host has them on their screen.</p>
+        <input id="mpCode" maxlength="6" placeholder="XXXX" style="background:#241808;color:#f0e0b8;border:1px solid #5a4420;border-radius:6px;padding:10px 14px;font-family:inherit;font-size:26px;letter-spacing:8px;width:170px;text-transform:uppercase">
+        <div style="margin-top:14px"><button class="btn primary" id="mpGo">knock</button>
+        <button class="btn ghostbtn" id="mpBack2">back</button></div>`);
+      const inp = document.getElementById('mpCode');
+      if (inp) inp.focus();
+      H.UI.on('mpGo', () => {
+        const code = (document.getElementById('mpCode').value || '').toUpperCase();
+        if (code.length < 4) return H.UI.toast('four letters.');
+        H.UI.screen(`<h2>knocking…</h2><p>the barn takes a second to answer.</p>`);
+        H.Net.join(code, n, onNet).then(() => mpLobbyScreen())
+          .catch(e => { H.UI.screen(`<h2>nobody answered</h2><p>${String(e && e.message || e)}</p>
+            <button class="btn primary" id="mpErrBack2">try again</button>`); H.UI.on('mpErrBack2', mpMenu); });
+      });
+      H.UI.on('mpBack2', mpMenu);
+    });
+    H.UI.on('mpBack', title);
+  }
+
+  function mpLobbyScreen() {
+    GAME.state = 'mplobby';
+    H.UI.showHud(false); H.Player.enabled = false;
+    const seats = H.Net.roster.map(r =>
+      `<div class="stat ${r.seat === H.Net.seat ? 'good' : ''}">● ${r.name}${r.seat === 0 ? ' <span class="tag">the barn is theirs</span>' : ''}${r.seat === H.Net.seat ? ' <span class="tag">you</span>' : ''}</div>`).join('');
+    H.UI.screen(`
+      <h1 style="font-size:26px">${H.Net.isHost ? 'your barn is open' : 'you\'re in the walls'}</h1>
+      <h2>${H.Net.isHost ? 'read them the code' : 'barn ' + H.Net.code}</h2>
+      ${H.Net.isHost ? `<div style="text-align:center;margin:14px 0"><div style="font-size:56px;letter-spacing:16px;color:#ffe9b0;text-shadow:0 0 24px rgba(255,180,60,.35)">${H.Net.code}</div></div>` : ''}
+      <h3>the crew (${H.Net.roster.length}/${D().NET.maxSeats})</h3>
+      ${seats}
+      ${H.Net.isHost
+        ? `<p style="color:#8a7a58;margin-top:12px">build the barn and call the cast as usual — when you open the doors, everybody comes in with you.</p>
+           <button class="btn primary" id="mpToSeason">on to the season →</button>
+           <button class="btn ghostbtn" id="mpClose">close the room</button>`
+        : `<p style="color:#8a7a58;margin-top:12px">the boss is working the drawer and the build. when they open the doors you're in.</p>
+           <div class="stat">waiting for doors…</div>
+           <button class="btn ghostbtn" id="mpLeave">leave</button>`}`);
+    if (H.Net.isHost) { H.UI.on('mpToSeason', seasonHub); H.UI.on('mpClose', leaveMp); }
+    else H.UI.on('mpLeave', leaveMp);
+  }
+
+  function guestStart(msg) {
+    GAME.mpSlots = msg.slots || {};
+    GAME.shadow = makeShadow(msg);
+    GAME.night = null;
+    GAME.crewPos = {}; GAME.crew = []; GAME.deltas = {};
+    Object.assign(GAME, { lastCue: 0, chatT: 3, voiceT: 0, perfectRun: 0, walkbyRun: 0, firstDrop: false, quietT: 0, saidLate: false, saidLast: false, chickenSeen: 0, posT: 0 });
+    H.Audio.unlock();
+    H.Player.actor = H.Net.actorOf(H.Net.seat);
+    H.View.setBuildMode(false, GAME.mpSlots);
+    H.View.setDaylight(false);
+    H.View.syncStations(GAME.mpSlots);
+    H.View.handsIdle();
+    H.UI.buildBar(null);
+    H.UI.keysHelp('wasd move · shift run · mouse look · E act · Q the comedy beat · esc menu');
+    H.UI.screen(null); H.UI.showHud(true);
+    H.Player.enabled = true; H.Player.spawnBackstage();
+    H.Audio.startNightBed();
+    GAME.state = 'night';
+    const boss = (H.Net.roster.find(r => r.seat === 0) || {}).name || 'the boss';
+    walkieSay(`doors. you're in ${boss}'s walls tonight — take a zone.`, true);
+    H.Player.lock();
+  }
+
+  function guestNightOver(msg) {
+    GAME.state = 'mpover';
+    H.Player.enabled = false; H.UI.showHud(false);
+    H.Audio.stopBeds();
+    H.View.clearGuests(); H.View.clearCrew();
+    GAME.shadow = null; GAME.deltas = {}; GAME.crew = [];
+    const t = msg.tally || {};
+    H.UI.screen(`
+      <h1 style="font-size:24px">last group's out</h1>
+      <h2>${msg.label || 'the night'}</h2>
+      <div class="chalk">
+        guests through: <b>${msg.admitted || 0}</b><br>
+        dropped: <b>${t.dropped || 0}</b> · melted into the floor: <b>${t.melted || 0}</b><br>
+        got ’em: <b>${t.gotem || 0}</b> · screams: <b>${t.scream || 0}</b> · walk-bys: <b>${t.walkby || 0}</b><br>
+        rescues: <b>${t.rescues || 0}</b> · complaints: <b>${t.complaints || 0}</b>
+      </div>
+      <p style="color:#8a7a58;margin-top:12px">the boss is counting the drawer. stay for the next one — they'll open the doors again.</p>
+      <button class="btn ghostbtn" id="mpLeave2">head home</button>`);
+    H.UI.on('mpLeave2', leaveMp);
+  }
+
+  function leaveMp() {
+    H.Net.close();
+    GAME.shadow = null; GAME.mpSlots = null; GAME.crew = []; GAME.crewPos = {}; GAME.deltas = {};
+    H.Player.actor = 'you'; H.Player.enabled = false;
+    H.View.clearCrew(); H.View.clearGuests();
+    H.Audio.stopBeds();
+    H.UI.showHud(false); H.UI.buildBar(null);
+    title();
+  }
+
   /* ---------------- cast call & the night ---------------- */
   function castCall() {
     GAME.state = 'cast';
@@ -671,7 +994,15 @@
     GAME.pendingPolaroid = null;
     // fresh night, fresh tape, fresh feed
     H.Replay.reset();
-    Object.assign(GAME, { lastCue: 0, chatT: 3, voiceT: 0, perfectRun: 0, walkbyRun: 0, firstDrop: false, quietT: 0, saidLate: false, saidLast: false, chickenSeen: 0 });
+    Object.assign(GAME, { lastCue: 0, chatT: 3, voiceT: 0, perfectRun: 0, walkbyRun: 0, firstDrop: false, quietT: 0, saidLate: false, saidLast: false, chickenSeen: 0, snapT: 0, shadow: null, deltas: {} });
+    // co-op: everybody comes in with you
+    if (H.Net.active && H.Net.isHost) {
+      H.Player.actor = H.Net.actorOf(0);
+      H.Net.broadcast({
+        t: 'start', nightIdx: s.nightIdx, slots: s.build.slots,
+        softScare: !!s.softNext, label: nd.label
+      });
+    }
     H.View.setBuildMode(false, s.build.slots);
     H.View.setDaylight(false);
     H.View.syncStations(s.build.slots);
@@ -690,14 +1021,16 @@
   GAME.onKey = function (code, e) {
     if (GAME.state === 'replay') { stopTape(); return; }
     if (GAME.state === 'night') {
+      const N = GAME.night || GAME.shadow;
+      if (!N) return;
       if (code === 'KeyE') {
-        const ctx = H.Player.context(GAME.night, GAME.S.build.slots);
+        const ctx = H.Player.context(N, GAME.night ? GAME.S.build.slots : (GAME.mpSlots || {}));
         if (!ctx) return;
-        if (ctx.kind === 'station' && !ctx.cool && !ctx.broken) { H.View.leverHand(); H.Audio.lever(); GAME.night.triggerStation(ctx.id); }
-        else if (ctx.kind === 'peek' && ctx.ready) { H.Audio.pop(); H.Audio.cloth(); H.View.popHands(ctx.id); GAME.night.triggerBody(ctx.id); }
-        else if (ctx.kind === 'rescue') GAME.night.rescue(ctx.id);
+        if (ctx.kind === 'station' && !ctx.cool && !ctx.broken) doStation(ctx.id);
+        else if (ctx.kind === 'peek' && ctx.ready) doBody(ctx.id);
+        else if (ctx.kind === 'rescue') doRescue(ctx.id);
       } else if (code === 'KeyQ') {
-        GAME.night.triggerComedy();
+        doComedy();
       } else if (code === 'Escape') {
         pauseMenu();
       }
@@ -728,15 +1061,19 @@
     if (GAME.state !== 'night') return;
     GAME.state = 'paused';
     H.Player.enabled = false;
+    const mpGuest = H.Net.active && !H.Net.isHost;
     H.UI.screen(`
       <h2>paused · the guests keep walking in your heart only</h2>
+      ${mpGuest ? '<p class="warn">the barn keeps running — it\'s not your sim. this only pauses you.</p>' : ''}
       <button class="btn primary" id="btnResume">back to the walls</button>
       <button class="btn" id="btnSettings3">settings</button>
-      <button class="btn ghostbtn" id="btnBail">abandon the night (comp everyone)</button>`);
+      <button class="btn ghostbtn" id="btnBail">${mpGuest ? 'leave the crew' : 'abandon the night (comp everyone)'}</button>`);
     H.UI.on('btnResume', () => { H.UI.screen(null); GAME.state = 'night'; H.Player.enabled = true; H.Player.lock(); });
     H.UI.on('btnSettings3', () => settings(() => { H.UI.screen(null); GAME.state = 'night'; H.Player.enabled = true; }));
     H.UI.on('btnBail', () => {
+      if (mpGuest) return leaveMp();
       H.Audio.stopBeds();
+      if (H.Net.active && H.Net.isHost) H.Net.broadcast({ t: 'bye' });
       GAME.night = null; GAME.state = 'season';
       H.UI.toast('night abandoned. the town is confused but forgiving. once.');
       seasonHub();
@@ -751,6 +1088,11 @@
     H.Player.enabled = false; H.UI.showHud(false);
     H.Audio.stopBeds();
     document.exitPointerLock && document.exitPointerLock();
+    // co-op: the crew sees the chalkboard too, then waits for you to open the doors again
+    if (H.Net.active && H.Net.isHost) {
+      H.Net.broadcast({ t: 'over', tally: r.tally, admitted: r.admitted, label: D().SEASON.nights[s.nightIdx].label });
+      H.View.clearCrew();
+    }
     // money
     const wages = Object.entries(s.crewAssign).filter(([n, id]) => !GAME.nightAbsent.includes(id)).length * 60;
     s.cash += r.drawer - wages;

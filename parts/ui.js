@@ -164,8 +164,9 @@
   };
   U.cooldowns = (night) => {
     if (!night) { U.els.cooldowns.innerHTML = ''; return; }
-    const body = Math.max(0, night.bodyReadyAt - night.t);
-    const com = Math.max(0, night.comedyReadyAt - night.t);
+    const me = H.Player.actor;
+    const body = Math.max(0, (night.bodyReadyAt[me] || 0) - night.t);
+    const com = Math.max(0, (night.comedyReadyAt[me] || 0) - night.t);
     U.els.cooldowns.innerHTML =
       (body > 0 ? `the pop: ${body.toFixed(0)}s<br>` : `the pop: <span class="good">ready</span><br>`) +
       (com > 0 ? `comedy beat: ${com.toFixed(0)}s` : `comedy beat: <span class="good">ready</span>`);
