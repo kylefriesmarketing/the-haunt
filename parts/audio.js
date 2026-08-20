@@ -96,6 +96,69 @@
   A.doorCreak = function () { if (!ensure()) return; tone('sawtooth', 130, now(), 0.7, 0.03, 210); };
   A.flash = function () { if (!ensure()) return; noise(now(), 0.08, 0.14, 6000); };
 
+  /* ---- M5: the hands, the hardware, the tape ---- */
+  A.cloth = function () {   // the peek curtain sweeping past your shoulder
+    if (!ensure()) return; const t = now();
+    noise(t, 0.16, 0.07, 2200); noise(t + 0.05, 0.12, 0.04, 900);
+  };
+  A.lever = function () {   // a station lever, pulled by a gloved hand
+    if (!ensure()) return; const t = now();
+    tone('square', 90, t, 0.06, 0.07, 62); noise(t + 0.03, 0.07, 0.05, 1600);
+  };
+  A.hammer = function () {  // build day: bolting something into a slot
+    if (!ensure()) return; const t = now();
+    for (let i = 0; i < 3; i++) { noise(t + i * 0.13, 0.05, 0.11, 2600); tone('square', 150 - i * 12, t + i * 0.13, 0.05, 0.05, 80); }
+  };
+  A.tape = function (on) {  // the replay theater: heads engaging, then hiss
+    if (!ensure()) return;
+    if (A._tape) { try { A._tape.src.stop(); } catch (e) { } try { A._tape.g.disconnect(); } catch (e) { } A._tape = null; }
+    if (!on) return;
+    const t = now();
+    tone('square', 220, t, 0.12, 0.05, 90);          // the deck swallowing the cassette
+    const ga = A.ctx.createGain(); ga.gain.value = 0.022; ga.connect(A.master);
+    const len = Math.floor(A.ctx.sampleRate * 2);
+    const buf = A.ctx.createBuffer(1, len, A.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1);
+    const src = A.ctx.createBufferSource(); src.buffer = buf; src.loop = true;
+    const f = A.ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 4200;
+    src.connect(f); f.connect(ga); src.start();
+    A._tape = { src, g: ga };
+  };
+
+  /* ---- the crowd: a murmur you can hear through plank walls, and the DIP that means they're close ----
+     bible §6.1: the setup half of a scare is audible before it is visible. this is that. */
+  A.setCrowd = function (level, tension) {
+    if (!A.ctx || !A.murmur) return;
+    const C = (g.HAUNT.DATA && g.HAUNT.DATA.CHATTER) || { dip: 0.62 };
+    const lv = Math.max(0, Math.min(1, level || 0));
+    const tn = Math.max(0, Math.min(1, tension || 0));
+    const target = 0.012 + lv * 0.055 * (1 - tn * C.dip);   // they go quiet as the room closes in
+    A.murmur.mg.gain.setTargetAtTime(A.muted ? 0 : target, A.ctx.currentTime, 0.25);
+    A.murmur.f.frequency.setTargetAtTime(300 + lv * 260 - tn * 150, A.ctx.currentTime, 0.3);
+  };
+  A.chatterBlip = function (kind) {   // a mumble, a laugh, a nervous giggle, a shush
+    if (!ensure()) return;
+    const t = now();
+    if (kind === 'shush') { noise(t, 0.34, 0.045, 5200); return; }
+    const n = kind === 'laugh' ? 6 : kind === 'nervous' ? 3 : 2 + Math.floor(Math.random() * 3);
+    const base = kind === 'laugh' ? 300 : kind === 'nervous' ? 380 : 170 + Math.random() * 110;
+    for (let i = 0; i < n; i++) {
+      const o = A.ctx.createOscillator(), ga = A.ctx.createGain(), f = A.ctx.createBiquadFilter();
+      f.type = 'bandpass'; f.frequency.value = 520 + Math.random() * 700; f.Q.value = 3.2;
+      o.type = 'sawtooth';
+      const step = kind === 'laugh' ? 0.085 : 0.13;
+      const t0 = t + i * step;
+      const fr = base * (kind === 'laugh' ? Math.pow(0.93, i) : (0.9 + Math.random() * 0.25));
+      o.frequency.setValueAtTime(fr, t0);
+      o.frequency.exponentialRampToValueAtTime(Math.max(60, fr * 0.86), t0 + step * 0.8);
+      const peak = (kind === 'laugh' ? 0.035 : kind === 'nervous' ? 0.028 : 0.022);
+      env(ga, t0, 0.012, peak, step * 0.3, peak * 0.3, step * 0.5);
+      o.connect(f); f.connect(ga); ga.connect(A.master);
+      o.start(t0); o.stop(t0 + step + 0.12);
+    }
+  };
+
   /* ---- beds ---- */
   A.startNightBed = function () {
     if (!ensure()) return;
@@ -110,7 +173,7 @@
     const src = A.ctx.createBufferSource(); src.buffer = buf; src.loop = true;
     const f = A.ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 320; f.Q.value = 0.6;
     src.connect(f); f.connect(mg); src.start();
-    A.murmur = { src, mg };
+    A.murmur = { src, mg, f };
     // the organ: a slow minor arpeggio that never resolves
     const og = A.ctx.createGain(); og.gain.value = 0.028; og.connect(A.master);
     const notes = [220, 261.63, 311.13, 261.63, 233.08, 261.63];
@@ -133,6 +196,7 @@
     if (A.murmur) { try { A.murmur.src.stop(); } catch (e) { } A.murmur = null; }
     if (A.organ) { clearTimeout(A.organ.timer); try { A.organ.og.disconnect(); } catch (e) { } A.organ = null; }
     A.alarm(false);
+    A.tape(false);
   };
 
   g.HAUNT = g.HAUNT || {};

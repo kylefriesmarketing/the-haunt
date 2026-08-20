@@ -9,9 +9,18 @@
     walls: null, freeRoam: false
   };
 
+  /* requestPointerLock returns a promise in current chrome; a refusal must not land in the
+     console as an unhandled rejection. every lock request in the game goes through here. */
+  P.lock = function () {
+    const cv = P.canvas || document.getElementById('game');
+    if (!cv || !cv.requestPointerLock) return;
+    try { const p = cv.requestPointerLock(); if (p && p.catch) p.catch(() => { }); } catch (e) { }
+  };
+
   P.init = function (canvas) {
     P.walls = H.Barn.rects();
-    canvas.addEventListener('click', () => { if (P.enabled && !P.locked) canvas.requestPointerLock(); });
+    P.canvas = canvas;
+    canvas.addEventListener('click', () => { if (P.enabled && !P.locked) P.lock(); });
     document.addEventListener('pointerlockchange', () => {
       P.locked = document.pointerLockElement === canvas;
       if (H.Game && H.Game.onLockChange) H.Game.onLockChange(P.locked);
@@ -28,6 +37,8 @@
 
   P.spawnBackstage = function () { P.x = 4; P.z = 14; P.y = 1.62; P.yaw = -Math.PI / 2; P.pitch = 0; };
   P.spawnYard = function () { P.x = -4; P.z = 14; P.y = 1.62; P.yaw = -Math.PI / 2; P.pitch = 0; };
+  /* build day starts on the porch, facing your own front door, like a paying customer */
+  P.spawnPorch = function () { P.x = -0.6; P.z = 7; P.y = 1.62; P.yaw = -Math.PI / 2; P.pitch = 0; };
 
   P.update = function (dt) {
     if (!P.enabled) return;
@@ -79,6 +90,34 @@
         return { kind: 'peek', id: p.id, label: ready ? 'E — THE POP (through the curtain)' : 'catching your breath…', ready };
       }
     }
+    return null;
+  };
+
+  /* build day: what's within arm's reach of the slot you're standing at? */
+  P.buildContext = function (buildSlots) {
+    const D = H.DATA;
+    const B = D.BUILD_MODE;
+    const near = (x, z, r) => { const dx = P.x - x, dz = P.z - z; return dx * dx + dz * dz < r * r; };
+    let best = null, bd = 1e9;
+    for (const slot of D.SLOTS) {
+      const dx = P.x - slot.at[0], dz = P.z - slot.at[1];
+      const d = dx * dx + dz * dz;
+      if (d < B.reach * B.reach && d < bd) {
+        const b = buildSlots[slot.id];
+        const node = D.NODES.find(n => n.id === slot.node);
+        const room = D.ROOMS.find(r => r.id === node.room);
+        bd = d;
+        best = {
+          kind: 'slot', id: slot.id, slot, b, room,
+          label: b && b.type
+            ? (b.broken ? `E — the ${D.STATIONS[b.type].name} is DEAD. fix it.` : `E — work on the ${D.STATIONS[b.type].name} (tier ${b.tier})`)
+            : `E — an empty slot in ${room.name}. build something.`
+        };
+      }
+    }
+    if (best) return best;
+    if (near(D.PROPS.callSheet[0], D.PROPS.callSheet[1], B.boardReach)) return { kind: 'callsheet', label: 'E — the call sheet (who works where)' };
+    if (near(D.PROPS.dials[0], D.PROPS.dials[1], B.boardReach)) return { kind: 'dials', label: 'E — the dials (spacing · ticket)' };
     return null;
   };
 

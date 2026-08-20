@@ -20,7 +20,22 @@ await page.reload(); await page.waitForTimeout(1200);
 await page.click('#btnNew'); await page.waitForTimeout(400);
 await page.click('#btnGo'); await page.waitForTimeout(400);
 await page.screenshot({ path: 'shot-2-season.png' });
-await page.click('#btnBuild'); await page.waitForTimeout(400);
+// walk-the-barn build mode (M5): daylight, slot markers, the in-world slot panel
+await page.click('#btnWalk'); await page.waitForTimeout(500);
+await page.screenshot({ path: 'shot-3a-walkbuild.png' });
+const walk = await page.evaluate(() => {
+  const H = window.HAUNT;
+  H.Game.S.cash = 3000;
+  H.Player.x = 30; H.Player.z = 4.4;                      // stand at the empty dinner slot
+  const ctx = H.Player.buildContext(H.Game.S.build.slots);
+  H.Game.onKey('KeyE');
+  const before = H.Game.S.cash;
+  document.querySelector('[data-buy="dropPanel"]').click();
+  return { ctxKind: ctx && ctx.kind, spent: before - H.Game.S.cash, slot: H.Game.S.build.slots.s_din_a, state: H.Game.state };
+});
+console.log('WALK BUILD:', JSON.stringify(walk));
+await page.evaluate(() => window.HAUNT.Game.onKey('KeyC'));  // to the clipboard
+await page.waitForTimeout(400);
 await page.screenshot({ path: 'shot-3-build.png' });
 
 // buy a couple of stations via the page's own logic
@@ -68,12 +83,48 @@ const stats = await page.evaluate(() => {
 });
 console.log('NIGHT STATE:', JSON.stringify(stats));
 
-// let the night run at speed to reach the sting
-await page.evaluate(() => { const G = window.HAUNT.Game; const N = G.night; const iv = setInterval(() => { if (!G.night || G.night.done) { clearInterval(iv); return; } for (let i = 0; i < 240; i++) G.night.tick(1 / 30); G.night.events.length = 0; }, 30); });
-await page.waitForTimeout(6000);
+// let the night run at speed to reach the sting — Game.step drives the WHOLE frame
+// (sim + tape + view), which is what the replay theater needs recorded
+await page.evaluate(async () => {
+  const G = window.HAUNT.Game;
+  await new Promise(res => {
+    const iv = setInterval(() => {
+      if (G.state !== 'night') { clearInterval(iv); res(); return; }
+      for (let i = 0; i < 60; i++) {
+        const N = G.night; if (!N || G.state !== 'night') break;
+        for (const [slotId, st] of Object.entries(N.stations)) {
+          if (st.type === 'flashCam' || st.type === 'fogBurst') continue;
+          for (const grp of N.groups) {
+            if (grp.mergedInto) continue;
+            let l = null;
+            for (const g of grp.guests) if (!g.out && !g.chicken) l = l === null ? g.s : Math.max(l, g.s);
+            if (l !== null && Math.abs(l - st.node.s) < 0.6) { N.triggerStation(slotId); break; }
+          }
+        }
+        G.step(0.1);
+      }
+    }, 16);
+    setTimeout(() => { clearInterval(iv); res(); }, 40000);
+  });
+});
 await page.screenshot({ path: 'shot-7-sting.png' });
 const state = await page.evaluate(() => window.HAUNT.Game.state);
 console.log('STATE AFTER FASTFORWARD:', state);
+
+// the tape (M5): roll it, confirm the VHS layer + cinematic camera, then let it run out
+const tape = await page.evaluate(async () => {
+  const H = window.HAUNT;
+  if (!document.getElementById('btnTape')) return { noTape: true };
+  document.getElementById('btnTape').click();
+  for (let i = 0; i < 40; i++) H.Game.step(1 / 30);
+  const cam = H.View.camera();
+  const mid = { state: H.Game.state, vhs: getComputedStyle(document.getElementById('vhs')).display,
+    time: document.getElementById('vhsTime').textContent, camX: +cam.position.x.toFixed(1), camY: +cam.position.y.toFixed(1) };
+  for (let i = 0; i < 260; i++) H.Game.step(1 / 30);
+  return { mid, after: H.Game.state, vhsAfter: getComputedStyle(document.getElementById('vhs')).display };
+});
+console.log('THE TAPE:', JSON.stringify(tape));
+await page.screenshot({ path: 'shot-7b-tape.png' });
 
 // endings screen renders?
 await page.evaluate(() => { window.HAUNT.Game.S.nightIdx = 99; });

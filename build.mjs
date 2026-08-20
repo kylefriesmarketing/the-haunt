@@ -2,7 +2,7 @@
    node build.mjs */
 import { readFileSync, writeFileSync } from 'fs';
 
-const parts = ['rng.js', 'data.js', 'audio.js', 'sim.js', 'barn3d.js', 'view.js', 'player.js', 'ui.js', 'game.js'];
+const parts = ['rng.js', 'data.js', 'audio.js', 'sim.js', 'barn3d.js', 'replay.js', 'view.js', 'player.js', 'ui.js', 'game.js'];
 const three = readFileSync('node_modules/three/build/three.min.js', 'utf8');
 const code = parts.map(p => `/* ===== parts/${p} ===== */\n` + readFileSync('parts/' + p, 'utf8')).join('\n');
 

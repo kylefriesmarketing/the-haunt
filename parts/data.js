@@ -8,7 +8,7 @@
   D.TITLE = 'THE HAUNT';
   D.SUBTITLE = 'the scream barn · route 9 · hazel park';
   D.SAVE_KEY = 'haunt-save';
-  D.VERSION = '0.9.0';
+  D.VERSION = '0.10.0';
 
   /* ---------------- the barn (meters, y-up; x east, z south) ----------------
      Guests snake: row A east, cross the east passage, row B west, out.
@@ -195,6 +195,7 @@
     marshalFee: 75,                 // re-inspection when you fail thursday
     fogMortality: 0.16,             // per night, per fog station: chance it dies
     repairCost: 45,
+    salvage: 0.5,                   // haul a station back out of a slot, get half the tier-1 price back
     guestGoal: 800                  // season guests target (our 8,000, scaled 1:10)
   };
 
@@ -231,20 +232,63 @@
   /* night pacing */
   D.NIGHT = { leadInS: 6, tailS: 8, clockStart: 19 * 60, clockPerRealS: 3.2 }; // fiction minutes per real second
 
+  /* ---------------- M5: the polish layer. view-only knobs — the sim never reads these. ---------------- */
+  D.BUILD_MODE = { reach: 2.6, boardReach: 2.6, markerY: 2.5 };
+  D.PROPS = { callSheet: [7.5, 12.34], dials: [4.2, 15.66] };   // the boards you walk up to on build day
+  D.REPLAY = { fps: 12, preS: 3.4, postS: 2.8, holdS: 1.0, bufferS: 14, orbit: 0.38, radius: 5.4, height: 2.5 };
+  D.CHATTER = { hearM: 18, dip: 0.62, blipGap: [2.6, 7.0], laughChance: 0.55 };
+  D.HANDS = { popS: 0.78, leverS: 0.42 };
+  D.WALKIE_GAP = 3.4;              // minimum seconds between ambient walkie lines (the feed is warmth, not spam)
+
   /* ---------------- voice — lowercase, deadpan, warm ---------------- */
   D.VOICE = {
     walkboys: ['copy.', 'on it.', 'resetting.', 'in position.', 'they’re coming to you.'],
-    huh: ['“huh.” — somebody’s dad', '“neat.” — the dad, devastating', '“is that it?” — a teen, lying'],
-    dropped: ['DROPPED. the room applauds with its lungs.', 'down. gone. floor. beautiful.', 'that one’s going on the wall.'],
-    melt: ['they’re crawling. they’re CRAWLING. (they’re fine. they’re laughing.)'],
-    rescue: ['bo’s got them. lights up. cocoa’s on the house.', 'walked out the quiet door. still got a high five.'],
-    conga: ['conga line forming — they’ve merged. scare FORWARD, people.', 'that’s one giant unscareable organism now. nice work.'],
+    huh: ['“huh.” — somebody’s dad', '“neat.” — the dad, devastating', '“is that it?” — a teen, lying',
+      '“i seen worse at the mall.” — a man who has not', '“that’s good craftsmanship.” — the dad, appraising the panel'],
+    dropped: ['DROPPED. the room applauds with its lungs.', 'down. gone. floor. beautiful.', 'that one’s going on the wall.',
+      'straight down like a folding chair. perfect.', 'got got. GOT GOT.', 'that noise came from somewhere ancient.'],
+    melt: ['they’re crawling. they’re CRAWLING. (they’re fine. they’re laughing.)',
+      'melted into the floor. hall of fame. help them up in a second.',
+      'that’s a puddle with a wristband. legendary.'],
+    rescue: ['bo’s got them. lights up. cocoa’s on the house.', 'walked out the quiet door. still got a high five.',
+      'quiet door, warm hand, no fuss. that’s the job.', 'they’re okay. they’re laughing already. that’s the whole religion.'],
+    conga: ['conga line forming — they’ve merged. scare FORWARD, people.', 'that’s one giant unscareable organism now. nice work.',
+      'two groups became one group. nobody’s scared of a parade.'],
     alarm: ['ALARM. lights up. fog dead. two hundred people looking at tater’s zipper.', 'the marshal was right. the marshal is always right.'],
     ghost: ['…nobody’s posted at that room. nice one, whoever that was.', 'chalk says one more than we counted. leaving it.'],
     grandma: ['she’s been coming since ’81. ruthie never got her either.'],
     bounty: ['THE BOUNTY. two hundred dollars. get the polaroid. get TWO.'],
     open: ['doors in five. breathe.', 'cast call: whoever’s here is the show. that’s always been the rule.'],
-    finale: ['last night of the season. best night of the year. it always is.']
+    finale: ['last night of the season. best night of the year. it always is.'],
+
+    /* --- M5 additions: the feed finally talks about the night you’re actually having --- */
+    perfect: ['on the beat. right on the BEAT.', 'that’s the one. do that eleven more times.', 'clean. surgical. rude.'],
+    streak: ['three on the beat in a row. somebody’s in the pocket.', 'you’re conducting now. the barn is an instrument.'],
+    firstDrop: ['first one down. the night has a pulse.', 'that’s one. the chalk gets its first mark.'],
+    quiet: ['it’s gone quiet out there. quiet is where they get brave.', 'nothing in four rooms. let’s put a noise somewhere.',
+      'the barn hums when nobody’s screaming. don’t let it hum.'],
+    walkbyBad: ['three walk-bys. the panel is dropping on empty hallway.', 'we’re scaring the plywood. wait for the leader.'],
+    polaroid: ['flash caught the whole row of them. that’s wall material.', 'got the picture. their grandkids will see that face.'],
+    chicken: ['someone took the quiet door. no shame in the quiet door.'],
+    fogDead: ['fog machine’s down again. they always are. it’s in their nature.'],
+    lateNight: ['past eleven. the crowd gets braver and the crew gets funnier.', 'late shift. this is when the good screams happen.'],
+    lastGroup: ['last group of the night is inside. make it count.'],
+    kidGroup: ['little ones in this batch. soft hands. big smiles. bo’s got the room.'],
+    crew: {
+      marcus: ['marcus revved LOW. he listens. sometimes.', 'that chainsaw came in at knee height. textbook.'],
+      dee: ['dee never moved and they still felt watched. that’s the craft.', 'nobody saw dee. everybody felt dee.'],
+      tater: ['tater slid. tater will tell you about it for a week.', 'the slider hit and the whole row went sideways.'],
+      grace: ['grace did the slow one. the room forgot how to breathe.', 'grace is quiet in the daylight. this is not the daylight.'],
+      bo: ['bo got one and apologized. they loved it.', 'bo scared them AND checked on them. what a guy.'],
+      priya: ['priya’s got their eyes. hit the other side. NOW.', 'she’s holding their attention like a hostage. go.']
+    },
+
+    /* --- build day, walking the barn --- */
+    build: ['the barn in the daylight. smaller. dustier. yours.',
+      'route’s clear. slots are marked. spend the drawer.',
+      'ruthie kept the good drop panel in the corn. it still works.'],
+    installed: ['bolted in. give it a tap. it’ll hold.', 'that’s live now. mind your fingers on show night.'],
+    tape: ['rolling the tape. the good one.']
   };
 
   g.HAUNT = g.HAUNT || {};

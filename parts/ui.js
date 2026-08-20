@@ -50,6 +50,30 @@
   #toast{position:absolute;top:70px;left:50%;transform:translateX(-50%);font-size:13px;color:#ffe9b0;background:rgba(20,12,6,.9);border:1px solid #6a5028;padding:8px 18px;border-radius:6px;opacity:0;transition:opacity .3s;letter-spacing:1px}
   .barwrap{background:#241a0c;border:1px solid #3a2c16;border-radius:4px;height:10px;width:120px;display:inline-block;vertical-align:middle;margin-left:8px}
   .barfill{height:100%;border-radius:3px;background:#b8924a}
+  /* --- M5: walking the barn on build day --- */
+  #buildBar{position:absolute;top:0;left:0;right:0;padding:12px 20px 26px;display:none;
+    background:linear-gradient(rgba(10,7,4,.92),rgba(10,7,4,0));font-size:13px;letter-spacing:1px;color:#d8c69a;text-shadow:0 1px 4px #000}
+  #buildBar b{color:#ffe9b0}
+  #buildBar .k{display:inline-block;border:1px solid #6a5028;border-radius:4px;padding:1px 6px;color:#ffe9b0;margin:0 3px}
+  #panelWrap{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(6,4,2,.55)}
+  #panelCard{max-width:540px;width:88%;max-height:82vh;overflow:auto;padding:20px 24px}
+  .opt{display:block;width:100%;text-align:left;background:#241808;border:1px solid #5a4420;color:#f0e0b8;
+    padding:9px 14px;margin:5px 0;border-radius:6px;cursor:pointer;font-family:inherit;font-size:13px}
+  .opt:hover{background:#3d2a12;border-color:#b8924a}
+  .opt:disabled{opacity:.38;cursor:default}
+  .opt .price{float:right;color:#c8a868}
+  /* --- M5: the tape --- */
+  #vhs{position:absolute;inset:0;display:none}
+  #vhsScan{position:absolute;inset:0;background:repeating-linear-gradient(to bottom,rgba(0,0,0,.26) 0 1px,rgba(255,255,255,.03) 1px 3px)}
+  #vhsGrain{position:absolute;inset:-24px;opacity:.17;background-repeat:repeat}
+  #vhsBand{position:absolute;left:0;right:0;height:64px;top:-100px;filter:blur(1px);
+    background:linear-gradient(to bottom,rgba(255,255,255,0),rgba(255,255,255,.11) 45%,rgba(255,255,255,0))}
+  #vhsEdge{position:absolute;inset:0;box-shadow:inset 0 0 150px rgba(0,0,0,.8)}
+  #vhsTop{position:absolute;top:24px;left:28px;font-size:15px;letter-spacing:4px;color:#f4f0e0;text-shadow:0 0 10px rgba(0,0,0,.95)}
+  #vhsRec{color:#ff5a4a}
+  #vhsBottom{position:absolute;bottom:28px;left:28px;font-size:14px;letter-spacing:2px;color:#f4f0e0;text-shadow:0 0 10px rgba(0,0,0,.95);line-height:1.6}
+  #vhsBottom span{color:#c8bca0;font-size:12px}
+  #vhsHint{position:absolute;bottom:28px;right:28px;font-size:12px;letter-spacing:2px;color:#c0b498;text-shadow:0 0 10px #000}
   `;
 
   U.init = function () {
@@ -63,12 +87,37 @@
         <div id="crosshair"></div><div id="cooldowns"></div>
         <div id="keysHelp">wasd move · shift run · mouse look · E act · Q the comedy beat · esc menu</div>
       </div>
+      <div id="buildBar"></div>
       <div id="vignette"></div><div id="flashWhite"></div><div id="toast"></div>
+      <div id="vhs">
+        <div id="vhsScan"></div><div id="vhsGrain"></div><div id="vhsBand"></div><div id="vhsEdge"></div>
+        <div id="vhsTop"><span id="vhsRec">●</span> REC <span id="vhsTime">00:00:00</span></div>
+        <div id="vhsBottom"></div><div id="vhsHint">any key — stop the tape</div>
+      </div>
+      <div id="panelWrap"><div class="panel" id="panelCard"></div></div>
       <div id="screen" class="full" style="display:none"><div class="panel card" id="screenCard"></div></div>`;
-    ['hud', 'hudTop', 'hudNight', 'hudDrawer', 'walkie', 'prompt', 'gradeFlash', 'cooldowns', 'screen', 'screenCard', 'flashWhite', 'toast'].forEach(id => U.els[id] = document.getElementById(id));
+    ['hud', 'hudTop', 'hudNight', 'hudDrawer', 'walkie', 'prompt', 'gradeFlash', 'cooldowns', 'screen', 'screenCard',
+      'flashWhite', 'toast', 'buildBar', 'panelWrap', 'panelCard', 'vhs', 'vhsGrain', 'vhsBand', 'vhsTime', 'vhsBottom', 'vhsRec']
+      .forEach(id => U.els[id] = document.getElementById(id));
+    U.els.vhsGrain.style.backgroundImage = `url(${grainTexture()})`;
   };
 
+  /* a little static, baked once */
+  function grainTexture() {
+    const c = document.createElement('canvas'); c.width = c.height = 96;
+    const x = c.getContext('2d');
+    const img = x.createImageData(96, 96);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const v = Math.random() * 255;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+      img.data[i + 3] = 255;
+    }
+    x.putImageData(img, 0, 0);
+    return c.toDataURL('image/png');
+  }
+
   U.showHud = v => { U.els.hud.style.display = v ? 'block' : 'none'; };
+  U.keysHelp = t => { const el = document.getElementById('keysHelp'); if (el) el.textContent = t; };
   U.screen = html => {
     if (html === null) { U.els.screen.style.display = 'none'; return; }
     U.els.screen.style.display = 'flex';
@@ -120,6 +169,41 @@
     U.els.cooldowns.innerHTML =
       (body > 0 ? `the pop: ${body.toFixed(0)}s<br>` : `the pop: <span class="good">ready</span><br>`) +
       (com > 0 ? `comedy beat: ${com.toFixed(0)}s` : `comedy beat: <span class="good">ready</span>`);
+  };
+
+  /* ---------- M5: build day, walked ---------- */
+  U.buildBar = (html) => {
+    if (html === null) { U.els.buildBar.style.display = 'none'; return; }
+    U.els.buildBar.style.display = 'block';
+    U.els.buildBar.innerHTML = html;
+  };
+  /* a lighter modal than U.screen — you can still see the barn behind it */
+  U.panel = (html) => {
+    if (html === null) { U.els.panelWrap.style.display = 'none'; U.els.panelCard.innerHTML = ''; return; }
+    U.els.panelWrap.style.display = 'flex';
+    U.els.panelCard.innerHTML = html;
+  };
+  U.panelOpen = () => U.els.panelWrap.style.display === 'flex';
+
+  /* ---------- M5: the tape (VHS grain lives here and NOWHERE else — bible §12) ---------- */
+  U.vhs = (on, info) => {
+    U.els.vhs.style.display = on ? 'block' : 'none';
+    const canvas = document.getElementById('game');
+    if (canvas) canvas.style.filter = on ? 'saturate(1.22) contrast(1.06) brightness(1.04)' : '';
+    if (on && info) {
+      U.els.vhsBottom.innerHTML =
+        `${info.room.toUpperCase()}<br><span>${info.who} · magnitude ${info.mag}` +
+        `${info.dropped ? ' · ' + info.dropped + ' dropped' : ''}${info.melted ? ' · ' + info.melted + ' MELTED' : ''}</span>`;
+    }
+  };
+  U.vhsTick = (t, dur) => {
+    const cs = Math.floor((t * 100) % 100), s = Math.floor(t) % 60, m = Math.floor(t / 60);
+    U.els.vhsTime.textContent =
+      `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}:${String(cs).padStart(2, '0')}`;
+    U.els.vhsRec.style.opacity = (Math.floor(t * 2) % 2) ? 0.25 : 1;
+    U.els.vhsGrain.style.backgroundPosition = `${Math.floor(Math.random() * 96)}px ${Math.floor(Math.random() * 96)}px`;
+    const band = ((t * 0.34) % 1.35) * (innerHeight + 160) - 120;
+    U.els.vhsBand.style.top = band + 'px';
   };
 
   /* ---------- the polaroid ---------- */
