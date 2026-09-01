@@ -256,7 +256,42 @@ console.log('\n[8] the lost hello (the bug Kyle hit: a lobby with nobody in it)'
   ok(got === 1, 'and the doors open for them', 'start received');
 }
 
-console.log('\n[9] names');
+console.log('\n[9] stale builds get named, not suffered');
+{
+  H.Net.test.reset();
+  let skews = [];
+  H.Net.test.hostLocal('the boss', (type, msg) => { if (type === 'versionSkew') skews.push(msg); });
+  const [hostEnd, guestEnd] = H.Net.test.pair('skew');
+  H.Net.test.acceptGuest(hostEnd);
+  let welcomeV = null;
+  guestEnd.on('data', m => { if (m.t === 'welcome') welcomeV = m.v; });
+  guestEnd.send({ t: 'hello', name: 'old tater', v: '0.9.0' });          // a cached build knocks
+  ok(skews.length === 1 && skews[0].theirs === '0.9.0', 'the host flags the mismatch', JSON.stringify(skews[0]));
+  ok(welcomeV === D.VERSION, 'and still answers with its own version so the guest can flag it too', welcomeV);
+  ok(H.Net.roster.length === 2, 'the stale guest is seated anyway — a warning, not a ban');
+  const [h2, g2] = H.Net.test.pair('same');
+  H.Net.test.acceptGuest(h2);
+  g2.send({ t: 'hello', name: 'fresh', v: D.VERSION });                  // matching build
+  ok(skews.length === 1, 'matching builds raise nothing');
+}
+
+console.log('\n[10] the heartbeat bookkeeping');
+{
+  H.Net.test.reset();
+  H.Net.test.hostLocal('the boss', () => { });
+  const [hostEnd, guestEnd] = H.Net.test.pair('hb');
+  H.Net.test.acceptGuest(hostEnd);
+  guestEnd.send({ t: 'hello', name: 'tater', v: D.VERSION });
+  const entry = H.Net.conns.find(c => c.seat === 1);
+  const t0 = entry.heard;
+  guestEnd.send({ t: 'hb' });
+  ok(entry.heard >= t0, 'an hb pulse refreshes when the host last heard them');
+  const lines = H.Net.lines();
+  ok(lines.length === 1 && lines[0].seat === 1 && typeof lines[0].quietS === 'number',
+    'the lobby can read the line table', JSON.stringify(lines[0]));
+}
+
+console.log('\n[11] names');
 {
   H.Net.test.reset();
   room(2);

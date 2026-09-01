@@ -223,6 +223,14 @@
     else if (type === 'snap') applySnap(msg);
     else if (type === 'ev') handleEvents(msg.evs || [], GAME.shadow);
     else if (type === 'over') guestNightOver(msg);
+    else if (type === 'versionSkew') {
+      H.UI.toast(`⚠ different builds! you: v${msg.mine} · them: v${msg.theirs} — both hard-refresh (ctrl+shift+R).`);
+      if (GAME.state === 'mplobby') mpLobbyScreen();
+    }
+    else if (type === 'lineLost') {
+      H.UI.toast(`the line to the barn has been quiet for ${msg.quietForS}s — it may be gone.`);
+      walkieSay('walkie static. hold your zone.', true);
+    }
     else if (type === 'hostgone' || type === 'bye') {
       H.UI.toast('the barn went dark — the host dropped.');
       leaveMp();
@@ -448,7 +456,8 @@
         <button class="btn" id="btnCoop">🕯️ the crew (co-op, 2–4)</button>
         <button class="btn ghostbtn" id="btnSettings">settings</button>
       </div>
-      <p style="font-size:11px;color:#5a4c34;margin-top:16px">every guest walks out laughing. that’s the whole religion.</p>`);
+      <p style="font-size:11px;color:#5a4c34;margin-top:16px">every guest walks out laughing. that’s the whole religion.</p>
+      <p style="font-size:10px;color:#453a28;margin-top:6px">v${D().VERSION} — co-op needs both of you on this number</p>`);
     H.UI.on('btnContinue', () => seasonHub());
     H.UI.on('btnNew', () => {
       if (cont && !confirm('start the season over? the wall of got-got comes down.')) return;
@@ -859,17 +868,37 @@
     H.UI.on('mpBack', title);
   }
 
+  /* the wire, in words a person can act on */
+  function lineWord(ice) {
+    if (ice === 'connected' || ice === 'completed' || ice === 'open') return '<span class="good">line good</span>';
+    if (ice === 'checking' || ice === 'new' || ice === 'opening') return '<span class="warn">shaking hands…</span>';
+    if (ice === 'disconnected') return '<span class="warn">line wobbling</span>';
+    if (ice === 'failed' || ice === 'closed') return '<span class="bad">line dead</span>';
+    return '<span class="warn">' + ice + '</span>';
+  }
+
   function mpLobbyScreen() {
     GAME.state = 'mplobby';
     H.UI.showHud(false); H.Player.enabled = false;
-    const seats = H.Net.roster.map(r =>
-      `<div class="stat ${r.seat === H.Net.seat ? 'good' : ''}">● ${r.name}${r.seat === 0 ? ' <span class="tag">the barn is theirs</span>' : ''}${r.seat === H.Net.seat ? ' <span class="tag">you</span>' : ''}</div>`).join('');
+    const lines = {};
+    for (const l of H.Net.lines()) lines[l.seat] = l;
+    const seats = H.Net.roster.map(r => {
+      const l = lines[r.seat];
+      const wire = (r.seat !== H.Net.seat && l) ? ' · ' + lineWord(l.ice) : '';
+      return `<div class="stat ${r.seat === H.Net.seat ? 'good' : ''}">● ${r.name}${r.seat === 0 ? ' <span class="tag">the barn is theirs</span>' : ''}${r.seat === H.Net.seat ? ' <span class="tag">you</span>' : ''}${wire}</div>`;
+    }).join('');
+    const guestLine = !H.Net.isHost && lines[0] ? `<div class="stat">the line to the barn: ${lineWord(lines[0].ice)}</div>` : '';
+    const skew = H.Net.skew
+      ? `<p class="bad">⚠ you two are running DIFFERENT BUILDS (${H.Net.skew.mine} vs ${H.Net.skew.theirs}).
+         co-op needs the same one — BOTH of you hard-refresh the page (ctrl+shift+R) and re-open the room.</p>` : '';
     H.UI.screen(`
       <h1 style="font-size:26px">${H.Net.isHost ? 'your barn is open' : 'you\'re in the walls'}</h1>
-      <h2>${H.Net.isHost ? 'read them the code' : 'barn ' + H.Net.code}</h2>
+      <h2>${H.Net.isHost ? 'read them the code' : 'barn ' + H.Net.code} · v${D().VERSION}</h2>
+      ${skew}
       ${H.Net.isHost ? `<div style="text-align:center;margin:14px 0"><div style="font-size:56px;letter-spacing:16px;color:#ffe9b0;text-shadow:0 0 24px rgba(255,180,60,.35)">${H.Net.code}</div></div>` : ''}
       <h3>the crew (${H.Net.roster.length}/${D().NET.maxSeats})</h3>
       ${seats}
+      ${guestLine}
       ${H.Net.isHost
         ? `<p style="color:#8a7a58;margin-top:12px">build the barn and call the cast as usual — when you open the doors, everybody comes in with you.</p>
            <button class="btn primary" id="mpToSeason">on to the season →</button>
@@ -877,9 +906,20 @@
         : `<p style="color:#8a7a58;margin-top:12px">the boss is working the drawer and the build. when they open the doors you're in.</p>
            <div class="stat">waiting for doors…</div>
            <button class="btn ghostbtn" id="mpLeave">leave</button>`}`);
-    if (H.Net.isHost) { H.UI.on('mpToSeason', seasonHub); H.UI.on('mpClose', leaveMp); }
+    if (H.Net.isHost) { H.UI.on('mpToSeason', () => { stopLobbyPoll(); seasonHub(); }); H.UI.on('mpClose', leaveMp); }
     else H.UI.on('mpLeave', leaveMp);
+    startLobbyPoll();
   }
+
+  /* the lobby re-reads the wire once a second — a dead line should never look like a lobby */
+  function startLobbyPoll() {
+    stopLobbyPoll();
+    GAME.lobbyPoll = setInterval(() => {
+      if (GAME.state !== 'mplobby' || !H.Net.active) return stopLobbyPoll();
+      mpLobbyScreen();
+    }, 1000);
+  }
+  function stopLobbyPoll() { if (GAME.lobbyPoll) { clearInterval(GAME.lobbyPoll); GAME.lobbyPoll = null; } }
 
   function guestStart(msg) {
     GAME.mpSlots = msg.slots || {};
@@ -926,6 +966,7 @@
   }
 
   function leaveMp() {
+    stopLobbyPoll();
     H.Net.close();
     GAME.shadow = null; GAME.mpSlots = null; GAME.crew = []; GAME.crewPos = {}; GAME.deltas = {};
     H.Player.actor = 'you'; H.Player.enabled = false;

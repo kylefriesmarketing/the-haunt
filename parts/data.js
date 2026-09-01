@@ -8,7 +8,7 @@
   D.TITLE = 'THE HAUNT';
   D.SUBTITLE = 'the scream barn · route 9 · hazel park';
   D.SAVE_KEY = 'haunt-save';
-  D.VERSION = '0.10.0';
+  D.VERSION = '0.11.0';
 
   /* ---------------- the barn (meters, y-up; x east, z south) ----------------
      Guests snake: row A east, cross the east passage, row B west, out.

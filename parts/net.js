@@ -18,10 +18,61 @@
     active: false, isHost: false, seat: 0, code: null, name: '',
     roster: [],            // [{seat, name}]
     conns: [],             // host: [{conn, seat, name}] · guest: [{conn}]
-    peer: null, onEvent: null, lastErr: null
+    peer: null, onEvent: null, lastErr: null,
+    lastHeard: 0,          // guest: when the host last said anything (heartbeat)
+    skew: null             // { mine, theirs } when the two ends run different builds
+  };
+
+  /* ⚠️ every public free TURN relay was probed dead (openrelay/freeturn/anyfirewall, 2026-08).
+     STUN-only is the honest ceiling without paid infra: most home-network pairs connect
+     direct; symmetric-NAT/CGNAT pairs cannot, and the lobby now SAYS so instead of hanging. */
+  const ICE = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' }
+    ]
   };
 
   function fire(type, payload) { if (N.onEvent) { try { N.onEvent(type, payload); } catch (e) { } } }
+  function nowMs() { return (typeof performance !== 'undefined' ? performance.now() : 0); }
+
+  /* the heartbeat: 3s pulses both ways so a dead line is NOTICED, not wondered about.
+     (a reliable datachannel can sit half-dead for a minute before 'close' fires.) */
+  let hbTimer = null;
+  function startHeartbeat() {
+    stopHeartbeat();
+    N.lastHeard = nowMs();
+    hbTimer = setInterval(() => {
+      if (!N.active) return stopHeartbeat();
+      if (N.isHost) N.broadcast({ t: 'hb' });
+      else {
+        N.toHost({ t: 'hb' });
+        if (nowMs() - N.lastHeard > 10000) fire('lineLost', { quietForS: Math.round((nowMs() - N.lastHeard) / 1000) });
+      }
+    }, 3000);
+  }
+  function stopHeartbeat() { if (hbTimer) { clearInterval(hbTimer); hbTimer = null; } }
+
+  /* what the wire actually looks like right now — polled by the lobby, never event-clobbered
+     (PeerJS owns the RTCPeerConnection's own handlers; we only read). */
+  N.lineState = function (conn) {
+    try {
+      const pc = conn.peerConnection;
+      if (!pc) return conn.open ? 'open' : 'opening';
+      return pc.iceConnectionState || 'unknown';
+    } catch (e) { return 'unknown'; }
+  };
+  N.lines = function () {
+    if (N.isHost) {
+      return N.conns.filter(c => c.seat !== null).map(c => ({
+        seat: c.seat, name: c.name, ice: N.lineState(c.conn),
+        quietS: c.heard ? Math.round((nowMs() - c.heard) / 1000) : null
+      }));
+    }
+    if (!N.conns.length) return [];
+    return [{ seat: 0, name: 'the barn', ice: N.lineState(N.conns[0].conn), quietS: Math.round((nowMs() - N.lastHeard) / 1000) }];
+  };
 
   /* ---------- transport ----------
      Anything with .send(obj) / .on(evt, fn) works, so the harness can swap in fake wires. */
@@ -31,20 +82,26 @@
     conn.on('data', msg => {
       if (!msg || typeof msg !== 'object') return;
       if (msg.t === 'hello') {
+        // a stale build on either end is the quietest way to break co-op — say it loudly
+        const hv = H.DATA ? H.DATA.VERSION : '?';
+        if (msg.v && msg.v !== hv) { N.skew = { mine: hv, theirs: msg.v }; fire('versionSkew', N.skew); }
         // a repeat hello is a RETRY, not a second monster — answer it again, don't burn a seat
-        if (entry.seat !== null) { try { conn.send({ t: 'welcome', seat: entry.seat, roster: N.roster }); } catch (e) { } return; }
+        if (entry.seat !== null) { try { conn.send({ t: 'welcome', seat: entry.seat, roster: N.roster, v: hv }); } catch (e) { } return; }
         const seat = nextSeat();
         if (seat === null) { try { conn.send({ t: 'full' }); } catch (e) { } return; }
         entry.seat = seat; entry.name = String(msg.name || 'a monster').slice(0, 18);
+        entry.heard = nowMs();
         rebuildRoster();
-        try { conn.send({ t: 'welcome', seat, roster: N.roster }); } catch (e) { }
+        try { conn.send({ t: 'welcome', seat, roster: N.roster, v: hv }); } catch (e) { }
         N.broadcast({ t: 'roster', roster: N.roster });
         fire('join', { seat, name: entry.name });
         return;
       }
       if (entry.seat === null) return;                       // never trust a seatless client
+      entry.heard = nowMs();
       if (msg.t === 'cmd') fire('cmd', { seat: entry.seat, c: msg.c });
       else if (msg.t === 'pos') fire('pos', { seat: entry.seat, x: msg.x, z: msg.z, yaw: msg.yaw });
+      /* hb needs no handler: the point was updating entry.heard, done above */
     });
     conn.on('close', () => {
       const i = N.conns.indexOf(entry);
@@ -57,7 +114,10 @@
   function wireGuest(conn, onWelcome) {
     conn.on('data', msg => {
       if (!msg || typeof msg !== 'object') return;
+      N.lastHeard = nowMs();
       if (msg.t === 'welcome') {
+        const gv = H.DATA ? H.DATA.VERSION : '?';
+        if (msg.v && msg.v !== gv) { N.skew = { mine: gv, theirs: msg.v }; fire('versionSkew', N.skew); }
         const first = N.seat !== msg.seat || !N.active;
         N.seat = msg.seat; N.roster = msg.roster || []; N.active = true;
         if (onWelcome) onWelcome();
@@ -98,11 +158,11 @@
     return c;
   }
 
-  N.host = function (name, onEvent) {
+  N.host = function (name, onEvent, _attempt) {
     N.onEvent = onEvent;
     return loadPeer().then(() => new Promise((res, rej) => {
       const code = makeCode();
-      const peer = new window.Peer(PEER_PREFIX + code, { debug: 0 });
+      const peer = new window.Peer(PEER_PREFIX + code, { debug: 0, config: ICE });
       N.peer = peer;
       let settled = false;
       peer.on('open', () => {
@@ -110,13 +170,25 @@
         N.active = true; N.isHost = true; N.seat = 0; N.code = code;
         N.name = String(name || 'the boss').slice(0, 18);
         N.conns = []; rebuildRoster();
+        startHeartbeat();
         res({ code });
       });
       /* ⚠️ wire the data handler the INSTANT the connection appears. Waiting for 'open' loses
          any hello that arrives first, and a lost hello is a friend who never gets a seat —
          they see a lobby, the host sees an empty room, and broadcast skips them forever. */
       peer.on('connection', conn => { wireHost(conn); });
-      peer.on('error', e => { N.lastErr = e; if (!settled) { settled = true; rej(e); } });
+      /* the signaling line only matters for NEW knocks — get it back quietly if it drops */
+      peer.on('disconnected', () => { try { if (!peer.destroyed) peer.reconnect(); } catch (e) { } });
+      peer.on('error', e => {
+        N.lastErr = e;
+        if (settled) return;
+        settled = true;
+        // two barns rolled the same code — roll again, up to three times
+        if (e && e.type === 'unavailable-id' && (_attempt || 0) < 3) {
+          try { peer.destroy(); } catch (err) { }
+          res(N.host(name, onEvent, (_attempt || 0) + 1));
+        } else rej(e);
+      });
     }));
   };
 
@@ -124,28 +196,37 @@
     N.onEvent = onEvent;
     code = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     return loadPeer().then(() => new Promise((res, rej) => {
-      const peer = new window.Peer({ debug: 0 });
+      const peer = new window.Peer({ debug: 0, config: ICE });
       N.peer = peer;
-      let settled = false, knocking = null;
+      let settled = false, knocking = null, conn = null;
       const stopKnocking = () => { if (knocking) { clearInterval(knocking); knocking = null; } };
       const fail = e => { if (settled) return; settled = true; stopKnocking(); rej(e); };
       peer.on('open', () => {
-        const conn = peer.connect(PEER_PREFIX + code, { reliable: true });
+        conn = peer.connect(PEER_PREFIX + code, { reliable: true });
         N.isHost = false; N.code = code;
         N.name = String(name || 'a monster').slice(0, 18);
         N.conns = [{ conn }];
         /* you are NOT in the room until the host seats you — resolving on our own
            connection open is what made a lost hello look like a successful join. */
-        wireGuest(conn, () => { if (!settled) { settled = true; stopKnocking(); res({ joined: true, seat: N.seat }); } });
+        wireGuest(conn, () => { if (!settled) { settled = true; stopKnocking(); startHeartbeat(); res({ joined: true, seat: N.seat }); } });
         conn.on('open', () => {
-          const knock = () => { try { conn.send({ t: 'hello', name: N.name }); } catch (e) { } };
+          const knock = () => { try { conn.send({ t: 'hello', name: N.name, v: H.DATA ? H.DATA.VERSION : '?' }); } catch (e) { } };
           knock();
           knocking = setInterval(() => { if (settled) stopKnocking(); else knock(); }, 700);
         });
         conn.on('error', e => fail(e));
       });
+      peer.on('disconnected', () => { try { if (!peer.destroyed) peer.reconnect(); } catch (e) { } });
       peer.on('error', e => { N.lastErr = e; fail(e); });
-      setTimeout(() => fail(new Error('the barn never answered — check the code, and make sure they\'re still on the lobby screen')), 15000);
+      setTimeout(() => {
+        if (settled) return;
+        /* name the actual failure: signaling found the barn but the datachannel never opened
+           = the two networks cannot shake hands (symmetric NAT / CGNAT — no free relay exists) */
+        const iceState = conn ? N.lineState(conn) : 'no-connection';
+        fail(new Error(conn && conn.peerConnection
+          ? 'your two networks won’t shake hands (line stuck at "' + iceState + '"). this happens on phone hotspots and some ISPs — have ONE of you switch networks (hotspot ↔ wifi) and knock again'
+          : 'the barn never answered — check the code, and make sure they’re still on the lobby screen'));
+      }, 15000);
     }));
   };
 
@@ -168,11 +249,12 @@
   function r2(v) { return Math.round(v * 100) / 100; }
 
   N.close = function () {
+    stopHeartbeat();
     try { N.broadcast({ t: 'bye' }); } catch (e) { }
     for (const e of N.conns) { try { e.conn.close(); } catch (err) { } }
     if (N.peer) { try { N.peer.destroy(); } catch (e) { } }
     N.peer = null; N.conns = []; N.active = false; N.isHost = false;
-    N.seat = 0; N.code = null; N.roster = [];
+    N.seat = 0; N.code = null; N.roster = []; N.skew = null;
   };
 
   N.nameOf = function (actor) {
@@ -269,7 +351,7 @@
       G.conn = conn;
       return G;
     },
-    reset() { N.onEvent = null; N.active = false; N.isHost = false; N.seat = 0; N.code = null; N.roster = []; N.conns = []; N.peer = null; }
+    reset() { stopHeartbeat(); N.onEvent = null; N.active = false; N.isHost = false; N.seat = 0; N.code = null; N.roster = []; N.conns = []; N.peer = null; N.skew = null; N.lastHeard = 0; }
   };
 
   N.MAX_SEATS = MAX_SEATS;
