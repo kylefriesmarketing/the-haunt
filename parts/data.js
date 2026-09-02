@@ -324,6 +324,10 @@
   D.HANDS = { popS: 0.78, leverS: 0.42 };
   D.WALKIE_GAP = 3.4;              // minimum seconds between ambient walkie lines (the feed is warmth, not spam)
 
+  /* ---------------- game feel (view/UI only — the sim never reads this) ---------------- */
+  D.FEEL = { veilMs: 420, doorsHoldMs: 1400, crossMax: 1.9 };
+  D.STING = { countMs: 900, chimeDelayMs: 500 };
+
   /* view-only: hand-painted boards on the guest side, in the house voice.
      ⚠️ every 'at' sits on a REAL wall face (inner faces: z 2.18 / z 25.82 / x 45.82) and clear of
      D.ROUTE — dressRooms asserts both at boot and warns rather than shipping a sign in a doorway. */

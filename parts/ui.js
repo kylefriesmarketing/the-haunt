@@ -41,6 +41,21 @@
     font-size:16px;letter-spacing:3px;color:#ffe9b0;background:rgba(12,8,4,.82);border:1px solid #6a5028;
     border-radius:8px;padding:14px 26px;text-shadow:0 1px 4px #000}
   #clickHint small{display:block;font-size:11px;letter-spacing:1px;color:#a89878;margin-top:6px}
+  /* --- the veil: every screen change used to be a hard cut --- */
+  #veil{position:absolute;inset:0;background:#050308;opacity:0;transition:opacity .42s;pointer-events:none;z-index:40}
+  #veilCard{position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;color:#f0dca0;text-align:center}
+  #veilCard b{font-size:46px;letter-spacing:10px;text-shadow:0 0 22px rgba(255,180,60,.3)}
+  #veilCard span{font-size:13px;letter-spacing:3px;color:#a08858;margin-top:8px}
+  /* --- the chalkboard writes itself, one line at a time --- */
+  @keyframes chalkIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  /* ⚠️ base opacity is 1 and the animation runs BACKWARDS: the stagger is a bonus, so a browser
+     that never runs the animation shows a readable chalkboard instead of a blank one. */
+  .chalk .cl{display:block;opacity:1;animation:chalkIn .34s ease-out backwards}
+  .chalk.staged .cl{animation:none;opacity:0}
+  .chalk .cl:nth-child(1){animation-delay:.05s}.chalk .cl:nth-child(2){animation-delay:.29s}
+  .chalk .cl:nth-child(3){animation-delay:.53s}.chalk .cl:nth-child(4){animation-delay:.77s}
+  .chalk .cl:nth-child(5){animation-delay:1.01s}.chalk .cl:nth-child(6){animation-delay:1.25s}
+  #gradeFlash small{display:block;font-size:13px;letter-spacing:3px;color:#c8b48c;margin-top:2px}
   table{border-collapse:collapse;width:100%;font-size:12px}
   td,th{padding:5px 8px;border-bottom:1px solid #2c2010;text-align:left;color:#c8b48c}
   th{color:#8a7648;font-weight:normal;letter-spacing:1px}
@@ -100,9 +115,11 @@
         <div id="vhsBottom"></div><div id="vhsHint">any key — stop the tape</div>
       </div>
       <div id="panelWrap"><div class="panel" id="panelCard"></div></div>
+      <div id="veil"><div id="veilCard"></div></div>
       <div id="screen" class="full" style="display:none"><div class="panel card" id="screenCard"></div></div>`;
     ['hud', 'hudTop', 'hudNight', 'hudDrawer', 'walkie', 'prompt', 'gradeFlash', 'cooldowns', 'screen', 'screenCard',
-      'flashWhite', 'toast', 'buildBar', 'panelWrap', 'panelCard', 'vhs', 'vhsGrain', 'vhsBand', 'vhsTime', 'vhsBottom', 'vhsRec']
+      'flashWhite', 'toast', 'buildBar', 'panelWrap', 'panelCard', 'vhs', 'vhsGrain', 'vhsBand', 'vhsTime', 'vhsBottom', 'vhsRec',
+      'veil', 'veilCard']
       .forEach(id => U.els[id] = document.getElementById(id));
     U.els.vhsGrain.style.backgroundImage = `url(${grainTexture()})`;
   };
@@ -122,6 +139,55 @@
   }
 
   U.showHud = v => { U.els.hud.style.display = v ? 'block' : 'none'; };
+  U._rm = false; U._strobeOff = false;
+  U.setA11y = o => { U._rm = !!o.reducedMotion; U._strobeOff = !!o.strobeOff; };
+
+  /* One crossfade for every screen change.
+     ⚠️ the cleanup timeout is scheduled BEFORE mid() runs: an exception inside mid() must never
+     strand an opaque, click-eating veil over the game. That is a hard soft-lock. */
+  U.veil = function (mid, holdMs, cardHtml, after) {
+    const v = U.els.veil, c = U.els.veilCard, F = H.DATA.FEEL;
+    if (!v || !c) { try { mid && mid(); } catch (e) { console.error(e); } if (after) after(); return; }
+    clearTimeout(U._veilA); clearTimeout(U._veilB);
+    v.style.pointerEvents = 'auto'; v.style.opacity = 1;
+    U._veilA = setTimeout(function () {
+      if (cardHtml) { c.style.display = 'flex'; c.innerHTML = cardHtml; }
+      U._veilB = setTimeout(function () {
+        c.style.display = 'none'; c.innerHTML = '';
+        v.style.opacity = 0; v.style.pointerEvents = 'none';
+        if (after) setTimeout(after, F.veilMs);     // the ceremony starts once the screen is VISIBLE
+      }, holdMs || 0);
+      try { mid && mid(); } catch (e) { console.error('THE HAUNT: veil mid threw', e); }
+    }, F.veilMs);
+  };
+
+  /* the drawer counts up instead of simply appearing */
+  U.countUp = function (id, to, ms) {
+    const el = document.getElementById(id); if (!el) return;
+    const t0 = performance.now();
+    const step = function () {
+      const k = Math.min(1, (performance.now() - t0) / (ms || 900));
+      const e = 1 - Math.pow(1 - k, 3);
+      el.textContent = '$' + Math.round(to * e);
+      if (k < 1) requestAnimationFrame(step);
+    };
+    step();
+    // rAF is suspended in background tabs and in the preview pane — the number must still land
+    clearTimeout(U._countT);
+    U._countT = setTimeout(function () { el.textContent = '$' + Math.round(to); }, (ms || 900) + 140);
+  };
+  U.unstage = function (sel) {
+    const el = document.querySelector(sel); if (!el) return;
+    el.classList.remove('staged');
+    // ⚠️ same law as countUp: a suspended compositor freezes the cascade in its delay and the
+    // board reads BLANK. Force the end state once the stagger has had its time.
+    clearTimeout(U._unstageT);
+    U._unstageT = setTimeout(function () {
+      const ls = el.querySelectorAll('.cl');
+      // a running animation outranks inline style in the cascade — clear it, then the base opacity:1 applies
+      for (let i = 0; i < ls.length; i++) { ls[i].style.animation = 'none'; ls[i].style.opacity = 1; }
+    }, 1700);
+  };
   U.keysHelp = t => { const el = document.getElementById('keysHelp'); if (el) el.textContent = t; };
   /* a co-op guest is dropped into the night by the WIRE, not by a click, so they arrive with no
      pointer lock and no way to look around. say so, plainly, until they click. */
@@ -145,9 +211,10 @@
     while (U.els.walkie.children.length > 5) U.els.walkie.removeChild(U.els.walkie.firstChild);
     setTimeout(() => { d.style.opacity = 0; setTimeout(() => d.remove(), 400); }, 6000);
   };
+  const GRADE_BODY = { perfect: 'right on the beat', good: 'landed', early: 'they saw it coming', late: 'the panel dropped on nobody' };
   U.grade = (label, id) => {
     const el = U.els.gradeFlash;
-    el.textContent = label;
+    el.innerHTML = label + (GRADE_BODY[id] ? '<small>' + GRADE_BODY[id] + '</small>' : '');
     el.style.color = id === 'perfect' ? '#ffe9a0' : id === 'good' ? '#c8e8a0' : '#c89078';
     el.style.opacity = 1; el.style.transform = 'translate(-50%,-50%) scale(1.15)';
     clearTimeout(U._gt);
@@ -155,12 +222,18 @@
   };
   U.flash = () => {
     const f = U.els.flashWhite;
+    if (U._strobeOff) {              // a full-screen white pop is exactly what strobe-off promises to suppress
+      f.style.transition = 'opacity .5s'; f.style.opacity = 0.16;
+      setTimeout(() => { f.style.opacity = 0; }, 120);
+      return;
+    }
     f.style.transition = 'none'; f.style.opacity = 0.9;
     requestAnimationFrame(() => { f.style.transition = 'opacity .5s'; f.style.opacity = 0; });
   };
   U.hudNight = (night, S) => {
     U.els.hudTop.textContent = night ? `${night.clock()} · ${night.nightDef.label}` : '';
-    U.els.hudDrawer.innerHTML = night ? `$${night.drawer}<div style="font-size:10px;color:#a08858">the drawer</div>` : '';
+    U.els.hudDrawer.innerHTML = night ? `$${night.drawer}<div style="font-size:10px;color:#a08858">the drawer</div>` +
+      `<div style="font-size:11px;color:#e8c878">☺ ${Math.round(night.tally.delight)}<span style="color:#8a7648"> delight</span></div>` : '';
     const left = night ? Math.max(0, night.nightDef.groups - night.spawned) : 0;
     const inside = night ? night.guests.filter(x => !x.out).length : 0;
     U.els.hudNight.innerHTML = night ? `groups still coming: ${left}<br>inside: ${inside}<br><span style="color:#7a6a48">dropped tonight: ${night.tally.dropped}</span>` : '';
@@ -170,6 +243,19 @@
     U.els.prompt.style.display = 'block';
     U.els.prompt.textContent = ctx.label;
   };
+  /* the beat, on the crosshair.
+     ⚠️ gated: a centre-screen element that scales with the cue and snaps a glow on and off at
+     beat rate is precisely what reducedMotion and strobeOff exist to suppress. */
+  U.beatPulse = (u01, inWin) => {
+    const c = document.getElementById('crosshair'); if (!c) return;
+    const F = H.DATA.FEEL;
+    if (U._rm) c.style.transform = 'none';
+    else c.style.transform = 'scale(' + (1 + Math.max(0, u01) * (F.crossMax - 1)).toFixed(2) + ')';
+    c.style.background = inWin ? 'rgba(255,233,176,.95)' : 'rgba(240,220,170,.85)';
+    c.style.boxShadow = U._strobeOff ? 'none'
+      : inWin ? '0 0 10px 3px rgba(255,233,176,.8)' : u01 > 0.4 ? '0 0 6px 1px rgba(255,207,90,.4)' : 'none';
+  };
+
   U.cooldowns = (night) => {
     if (!night) { U.els.cooldowns.innerHTML = ''; return; }
     const me = H.Player.actor;
@@ -213,6 +299,57 @@
     U.els.vhsGrain.style.backgroundPosition = `${Math.floor(Math.random() * 96)}px ${Math.floor(Math.random() * 96)}px`;
     const band = ((t * 0.34) % 1.35) * (innerHeight + 160) - 120;
     U.els.vhsBand.style.top = band + 'px';
+  };
+
+  /* ---------- the title poster: the first thing anyone sees ---------- */
+  U.titlePoster = function () {
+    if (U._poster) return U._poster;
+    const c = document.createElement('canvas'); c.width = 880; c.height = 380;
+    const x = c.getContext('2d'), W = 880, HH = 380, rng = H.makeRng(31);
+    const sky = x.createLinearGradient(0, 0, 0, HH);
+    sky.addColorStop(0, '#0a0820'); sky.addColorStop(0.62, '#181030'); sky.addColorStop(1, '#241016');
+    x.fillStyle = sky; x.fillRect(0, 0, W, HH);
+    for (let i = 0; i < 90; i++) {
+      x.fillStyle = 'rgba(200,214,255,' + (0.2 + rng.f() * 0.6) + ')';
+      x.fillRect(rng.f() * W, rng.f() * HH * 0.5, rng.f() < 0.12 ? 2 : 1, 1);
+    }
+    const mg = x.createRadialGradient(700, 84, 8, 700, 84, 95);
+    mg.addColorStop(0, 'rgba(255,242,204,.85)'); mg.addColorStop(0.3, 'rgba(255,242,204,.22)'); mg.addColorStop(1, 'rgba(255,242,204,0)');
+    x.fillStyle = mg; x.fillRect(560, -30, 300, 250);
+    x.fillStyle = '#fff2cc'; x.beginPath(); x.arc(700, 84, 26, 0, 7); x.fill();
+    x.fillStyle = 'rgba(225,210,175,.55)';
+    x.beginPath(); x.arc(692, 78, 5, 0, 7); x.fill(); x.beginPath(); x.arc(708, 92, 3.4, 0, 7); x.fill();
+    x.fillStyle = '#0d0a08'; x.fillRect(0, HH - 70, W, 70);
+    x.fillStyle = '#15100c';
+    for (let i = 0; i < 26; i++) { const tx = rng.f() * W, th = 24 + rng.f() * 30; x.fillRect(tx, HH - 70 - th, 6 + rng.f() * 14, th); }
+    x.fillStyle = '#120c08';
+    x.beginPath(); x.moveTo(190, HH - 70); x.lineTo(190, 168); x.lineTo(240, 118);
+    x.lineTo(335, 90); x.lineTo(430, 118); x.lineTo(480, 168); x.lineTo(480, HH - 70); x.closePath(); x.fill();
+    x.strokeStyle = 'rgba(175,185,225,.35)'; x.lineWidth = 2;
+    x.beginPath(); x.moveTo(430, 118); x.lineTo(480, 168); x.stroke();
+    const wg = x.createRadialGradient(420, 236, 3, 420, 236, 46);
+    wg.addColorStop(0, 'rgba(255,190,90,.55)'); wg.addColorStop(1, 'rgba(255,190,90,0)');
+    x.fillStyle = wg; x.fillRect(374, 190, 92, 92);
+    x.fillStyle = 'rgba(255,205,120,.9)'; x.fillRect(412, 226, 16, 20);   // ONE lit window: somebody is in the walls
+    x.fillStyle = '#0a0705'; x.fillRect(214, 138, 244, 40);
+    x.font = 'bold 26px "Courier New",monospace'; x.textAlign = 'center';
+    'SCREAM BARN'.split('').forEach(function (ch, i) {
+      const lit = i === 0 || i === 1 || i === 8;      // the three letters still burning
+      x.fillStyle = lit ? '#ffdca0' : 'rgba(90,76,52,.5)';
+      if (lit) { x.shadowColor = 'rgba(255,190,90,.8)'; x.shadowBlur = 14; } else x.shadowBlur = 0;
+      x.fillText(ch, 232 + i * 20, 166);
+    });
+    x.shadowBlur = 0;
+    x.strokeStyle = 'rgba(60,50,38,.5)'; x.lineWidth = 3;
+    x.beginPath(); x.moveTo(80, HH); x.quadraticCurveTo(180, HH - 40, 300, HH - 66); x.stroke();
+    const fog = x.createLinearGradient(0, HH - 110, 0, HH - 40);
+    fog.addColorStop(0, 'rgba(140,150,180,0)'); fog.addColorStop(0.7, 'rgba(140,150,180,.13)'); fog.addColorStop(1, 'rgba(140,150,180,0)');
+    x.fillStyle = fog; x.fillRect(0, HH - 110, W, 70);
+    for (let i = 0; i < 240; i++) { x.fillStyle = 'rgba(255,255,255,' + (rng.f() * 0.05) + ')'; x.fillRect(rng.f() * W, rng.f() * HH, 1, 1); }
+    const vg = x.createRadialGradient(W / 2, HH / 2, HH * 0.4, W / 2, HH / 2, W * 0.62);
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,.55)');
+    x.fillStyle = vg; x.fillRect(0, 0, W, HH);
+    return (U._poster = c.toDataURL('image/png'));
   };
 
   /* ---------- the polaroid ---------- */

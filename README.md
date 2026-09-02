@@ -107,6 +107,12 @@ workspace law). Live at **https://kylefriesmarketing.github.io/the-haunt/**.
   curtain that parts when you come through, the crowd murmur that DIPS as they close on a scare
   (bible §6.1's setup cue, audible), chatter/laugh/shush blips, and ~40 new walkie lines with
   real triggers (first drop, three-perfect streak, lulls, walk-by runs, per-crew banter, the hour).
+- ✅ **M9 the first impression & the ceremony** — the title screen is a painted one-sheet (barn,
+  moon, the marquee with its three surviving letters, ONE lit window because somebody is in the
+  walls), every screen change crossfades through a veil instead of hard-cutting, DOORS is its own
+  timecard beat, the chalkboard writes itself a line at a time while the drawer counts up under a
+  chime, DELIGHT finally shows on the night HUD, the crosshair reads the beat, and each grade gets
+  a plain-language body ("the panel dropped on nobody").
 - ✅ **M8 set & skin** — the barn from the yard was a black void with two dots; it now has a gradient
   sky dome, a 320-star `Points` field (140 meshes → 1: the perf win that pays for the rest), a
   moon halo, treeline silhouettes, a real ROOF (backface-culled, so the interior is untouched),

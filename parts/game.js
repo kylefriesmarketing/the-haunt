@@ -49,6 +49,7 @@
     GAME.S = load() || freshSeason();
     H.Audio.init(GAME.S.settings.muted);
     H.View.setA11y(GAME.S.settings);
+    H.UI.setA11y(GAME.S.settings);
     document.addEventListener('mousedown', () => { if (GAME.state === 'replay') stopTape(); });
     title();
     GAME.lastT = performance.now();
@@ -339,6 +340,10 @@
       if (d > -2 && d < 9) { const u = 1 - Math.min(1, Math.abs(d) / 9); if (!best || u > best) best = u; }
     }
     GAME.lastCue = best === null ? Math.max(0, GAME.lastCue - dt * 1.6) : best;
+    // ⚠️ ABOVE the early return: below it the crosshair freezes enlarged and lit after the group walks on
+    let inWin = false;
+    for (const n2 of D().NODES) { const dd = deltas[n2.id]; if (dd !== null && dd !== undefined && Math.abs(dd) < 0.7) { inWin = true; break; } }
+    H.UI.beatPulse(GAME.lastCue, inWin);
     if (best === null) return;
     GAME.cueT -= dt;
     if (GAME.cueT <= 0) { H.Audio.cueTick(best); GAME.cueT = 0.72 - best * 0.52; }
@@ -444,7 +449,8 @@
     const s = GAME.S;
     const cont = s && s.nights > 0;
     H.UI.screen(`
-      <h1>${D().TITLE}</h1>
+      <img src="${H.UI.titlePoster()}" alt="" style="width:100%;border-radius:8px;border:1px solid #3a2c16;display:block;margin-bottom:12px">
+      <h1 style="font-size:34px">${D().TITLE}</h1>
       <h2>${D().SUBTITLE} · a DIRTY BOY DEVS game</h2>
       <p>the scream barn went dark in ’99. twenty-one octobers, then none.<br>
       you didn’t inherit it — the county was going to take it. <b>you signed the note.</b></p>
@@ -1018,7 +1024,7 @@
       <p style="color:#8a7a58">${D().VOICE.open[s.nightIdx % D().VOICE.open.length]}${nd.finale ? '<br><b>' + D().VOICE.finale[0] + '</b>' : ''}</p>
       <button class="btn primary" id="btnDoors">DOORS · get in the walls</button>
       <button class="btn ghostbtn" id="btnBackBuild">wait, the build</button>`);
-    H.UI.on('btnDoors', startNight);
+    H.UI.on('btnDoors', () => H.UI.veil(startNight, D().FEEL.doorsHoldMs, '<b>DOORS.</b><span>breathe</span>'));
     H.UI.on('btnBackBuild', buildDay);
   }
 
@@ -1175,11 +1181,15 @@
     s.notePaidAll = owed === 0 && s.paymentsDone >= Math.min(4, D().SEASON.notePayments.filter(p => s.nightIdx > p.afterNight).length);
     save();
     GAME.stingData = { r, wages, dS, dF, owed, polHtml, fogNote };
-    stingCard();
+    setTimeout(() => H.Audio.stingChime(), D().STING.chimeDelayMs);
+    H.UI.veil(() => stingCard(true), 900, '<b>last group\u2019s out.</b>', () => {
+      H.UI.unstage('.chalk');                  // the lines start writing now that you can SEE them
+      H.UI.countUp('drawerCount', r.drawer, D().STING.countMs);
+    });
   }
 
   /* the card itself — re-rendered when the tape finishes rolling */
-  function stingCard() {
+  function stingCard(staged) {
     const s = GAME.S;
     const { r, wages, dS, dF, owed, polHtml, fogNote } = GAME.stingData;
     const t = r.tally;
@@ -1187,13 +1197,13 @@
     H.UI.screen(`
       <h1 style="font-size:24px">the drawer, counted</h1>
       <h2>${D().SEASON.nights[s.nightIdx - 1].label}</h2>
-      <div class="row"><div class="col"><div class="chalk">
-        guests through: <b>${r.admitted}</b><br>
-        dropped: <b>${t.dropped}</b> · melted into the floor: <b>${t.melted}</b><br>
-        got ’em: <b>${t.gotem}</b> · screams: <b>${t.scream}</b> · walk-bys: <b>${t.walkby}</b><br>
-        delight banked: <b>${Math.round(t.delight)}</b> · rescues: <b>${t.rescues}</b> · complaints: <b>${t.complaints}</b><br>
-        ${t.ghost ? 'tally says one more than we counted. leaving it. —<br>' : ''}
-        drawer: <b class="good">$${r.drawer}</b> · wages: <b>-$${wages}</b>
+      <div class="row"><div class="col"><div class="chalk${staged ? ' staged' : ''}">
+        <span class="cl">guests through: <b>${r.admitted}</b></span>
+        <span class="cl">dropped: <b>${t.dropped}</b> · melted into the floor: <b>${t.melted}</b></span>
+        <span class="cl">got ’em: <b>${t.gotem}</b> · screams: <b>${t.scream}</b> · walk-bys: <b>${t.walkby}</b></span>
+        <span class="cl">delight banked: <b>${Math.round(t.delight)}</b> · rescues: <b>${t.rescues}</b> · complaints: <b>${t.complaints}</b></span>
+        ${t.ghost ? '<span class="cl">tally says one more than we counted. leaving it. —</span>' : ''}
+        <span class="cl">drawer: <b class="good" id="drawerCount">${staged ? '$0' : '$' + r.drawer}</b> · wages: <b>-$${wages}</b></span>
       </div>
       <div class="stat" style="margin-top:8px">scary ${dS >= 0 ? '+' : ''}${Math.round(dS)} → <b>${Math.round(s.rep.scary)}</b> · fun ${dF >= 0 ? '+' : ''}${Math.round(dF)} → <b>${Math.round(s.rep.fun)}</b></div>
       ${owed > 0 ? `<div class="stat bad">the note wants $${owed}. it can wait exactly one more night.</div>` : ''}
@@ -1265,8 +1275,8 @@
       <button class="btn primary" id="btnBackSet">back</button>`);
     const wire = (id, fn) => { const el = document.getElementById(id); el.onchange = () => { fn(el.checked); save(); }; };
     wire('cbMute', v => { s.settings.muted = v; H.Audio.setMuted(v); });
-    wire('cbStrobe', v => { s.settings.strobeOff = v; H.View.setA11y(s.settings); });
-    wire('cbMotion', v => { s.settings.reducedMotion = v; H.View.setA11y(s.settings); });
+    wire('cbStrobe', v => { s.settings.strobeOff = v; H.View.setA11y(s.settings); H.UI.setA11y(s.settings); });
+    wire('cbMotion', v => { s.settings.reducedMotion = v; H.View.setA11y(s.settings); H.UI.setA11y(s.settings); });
     wire('cbSoft', v => { s.softNext = v; });
     H.UI.on('btnBackSet', back);
   }

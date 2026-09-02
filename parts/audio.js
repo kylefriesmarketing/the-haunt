@@ -91,6 +91,11 @@
     if (!ensure()) return; const t = now();
     [523.25, 659.25, 783.99].forEach((f, i) => tone('sine', f, t + i * 0.22, 1.4, 0.05));
   };
+  A.stingChime = function () {   // the ritual end-of-night sting (FNAF's 6AM law, bible §1.7)
+    if (!ensure()) return; const t = now();
+    [523.25, 659.25, 783.99, 1046.5].forEach(function (f, i) { tone('triangle', f, t + i * 0.11, 0.5, 0.055); });
+  };
+  A.chalkTick = function () { if (!ensure()) return; noise(now(), 0.03, 0.05, 4200); };
   A.cash = function () { if (!ensure()) return; const t = now(); tone('triangle', 880, t, 0.07, 0.08); tone('triangle', 1174, t + 0.07, 0.12, 0.08); };
   A.click = function () { if (!ensure()) return; tone('sine', 500, now(), 0.04, 0.05); };
   A.doorCreak = function () { if (!ensure()) return; tone('sawtooth', 130, now(), 0.7, 0.03, 210); };
