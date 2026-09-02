@@ -78,7 +78,7 @@
       ambientVoice(dt, GAME.night);
       netHostTick(dt);
       const xray = H.Barn.inSpine(H.Player.x, H.Player.z);
-      H.View.syncGuests(GAME.night, xray);
+      H.View.syncGuests(GAME.night, xray, dt);
       H.View.syncCrew(otherCrew());
       H.UI.hudNight(GAME.night, GAME.S);
       H.UI.cooldowns(GAME.night);
@@ -92,7 +92,7 @@
       crowdAudio(dt, GAME.shadow);
       netGuestTick(dt);
       const xray = H.Barn.inSpine(H.Player.x, H.Player.z);
-      H.View.renderGuests(GAME.shadow.guests, xray);
+      H.View.renderGuests(GAME.shadow.guests, xray, dt);
       H.View.syncCrew(otherCrew());
       H.UI.hudNight(GAME.shadow, GAME.S);
       H.UI.cooldowns(GAME.shadow);
@@ -292,7 +292,7 @@
     R.t += dt;
     const take = R.take;
     const tt = Math.min(R.t, take.dur);
-    H.View.replayFrame(take, H.Replay.frameAt(take, tt));
+    H.View.replayFrame(take, H.Replay.frameAt(take, tt), dt);
     H.View.setReplayCam(take, tt);
     H.UI.vhsTick(tt, take.dur);
     if (R.t > take.dur + D().REPLAY.holdS) stopTape();

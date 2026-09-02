@@ -1,6 +1,6 @@
 # THE HAUNT
 ### the scream barn · route 9 · hazel park — a DIRTY BOY DEVS game
-**v0.10.0 · 2026-08-19 · design contract: `THE-HAUNT-BIBLE.md` (read it before changing anything)**
+**v0.11.0 · 2026-09-01 · design contract: `THE-HAUNT-BIBLE.md` (read it before changing anything)**
 
 > You don't survive the haunted house. You RUN it. Design the maze between weekends, then get in
 > the walls on show nights — drop the panel on the beat, sprint the reset paths, and watch the
@@ -66,7 +66,7 @@ next night. Drop in mid-show, leave whenever — the barn keeps running either w
   these numbers or they don't ship. ALL TUNING LIVES IN `parts/data.js`.**
 - **`node test-replay.mjs` — the tape, 13 checks.** The load-bearing one is #1: a *recorded*
   night must be byte-identical to an unrecorded one. The recorder only ever READS the night.
-- **`node test-net.mjs` — co-op, 34 checks.** Drives the REAL `net.js` over in-memory wires
+- **`node test-net.mjs` — co-op, 53 checks.** Drives the REAL `net.js` over in-memory wires
   (`Net.test.pair()`, whose `send()` round-trips through JSON like the real transport) against a
   REAL night. The load-bearing one is §5: **a watched night is byte-identical to an unwatched
   one** — broadcasting must never perturb the sim. Also proves seats, per-monster cooldowns,
@@ -107,6 +107,12 @@ workspace law). Live at **https://kylefriesmarketing.github.io/the-haunt/**.
   curtain that parts when you come through, the crowd murmur that DIPS as they close on a scare
   (bible §6.1's setup cue, audible), chatter/laugh/shush blips, and ~40 new walkie lines with
   real triggers (first drop, three-perfect streak, lulls, walk-by runs, per-crew banter, the hour).
+- ✅ **M7 the little people** — guests are rigged: torso/arms/legs/head, seeded skin+hair+outfit per
+  guest id, a walk cycle driven by DISTANCE TRAVELED (so it is identical live, on the co-op wire
+  and on the tape, including a paused tape), and eight reaction poses that read at 10 m — flinch,
+  arms-overhead scream, got-em recoil, DROPPED folding-chair, melt-crawl, distress hugging knees,
+  a loose joy walk-out, and the dad crossing his arms for "huh." Seven shared geometries, ~44
+  pooled materials, 20 m limb LOD.
 - ✅ **M6 co-op crew mode** — 2–4 monsters in one barn over PeerJS, **host-authoritative** (bible §10:
   the host runs the one true sim, guests are renderers that send thin intents). Room code, roster,
   seats capped at 4, per-monster pop/comedy cooldowns, you see each other backstage as hooded

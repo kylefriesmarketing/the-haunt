@@ -6,6 +6,8 @@
   const H = g.HAUNT;
   const D = () => H.DATA;
   const FACES = ['calm', 'worry', 'scream', 'joy'];
+  /* the pose vocabulary — ONE authority; net.js and view.js reference this, never a copy */
+  const POSES = ['walk', 'flinch', 'scream', 'gotem', 'dropped', 'melt', 'crawl', 'distress', 'joy', 'huh'];
 
   const R = {
     frames: [],        // ring buffer: { t, g: [ [id,x,y,z,ry,tilt,faceIdx], ... ] }
@@ -17,23 +19,32 @@
 
   R.reset = function () { R.frames = []; R.roster = {}; R.pending = null; R.take = null; R.acc = 0; };
 
-  /* the pose a guest is striking right now — the ONE definition, shared with view.syncGuests
-     so the tape and the live show can never drift apart. */
+  /* the pose a guest is striking right now — the ONE definition, shared with view.syncGuests,
+     the wire, and the tape, so the three can never drift apart.
+     poseT is SIM-time progress through the reaction (0→1), so the rig's snap-in is tape-true. */
+  R.POSES = POSES;
   R.poseOf = function (gst) {
-    let face = 'calm', yOff = 0, tilt = 0, ly = 0;
+    let face = 'calm', yOff = 0, tilt = 0, ly = 0, pose = 'walk', poseT = 0;
     const frac = gst.nerve / gst.pool;
     if (frac < 0.5) face = 'worry';
     if (gst.state === 'react') {
       face = 'scream';
-      if (gst.reactKind === 'flinch') yOff = Math.abs(Math.sin(gst.reactT * 18)) * 0.12;
+      const dur = D().POSE.durs[gst.reactKind] || 1;
+      poseT = Math.max(0, Math.min(1, 1 - gst.reactT / dur));
+      pose = gst.reactKind;
+      if (gst.reactKind === 'flinch') {
+        yOff = Math.abs(Math.sin(gst.reactT * 18)) * 0.12;
+        const arch = D().ARCHETYPES[gst.arch];
+        if (arch && arch.huh) { pose = 'huh'; face = 'calm'; }  // the dad. arms crossed. "huh."
+      }
       else if (gst.reactKind === 'scream') yOff = Math.abs(Math.sin(gst.reactT * 14)) * 0.22;
       else if (gst.reactKind === 'gotem') { yOff = Math.abs(Math.sin(gst.reactT * 12)) * 0.3; tilt = 0.2; }
-      else if (gst.reactKind === 'dropped') { tilt = Math.min(1.35, (2.6 - gst.reactT) * 2.2); }
+      else if (gst.reactKind === 'dropped') { tilt = Math.min(0.55, (2.6 - gst.reactT) * 1.1); ly = -Math.min(0.42, (2.6 - gst.reactT) * 0.9); } // sits like a folding chair now, not a plank
       else if (gst.reactKind === 'melt') { tilt = 1.45; ly = -0.1; }
-    } else if (gst.state === 'crawl') { face = 'joy'; tilt = 1.45; ly = -0.15; }
-    else if (gst.state === 'distress') { face = 'worry'; ly = -0.5; }
-    else if (gst.spent) face = 'joy';
-    return { face, yOff, tilt, ly };
+    } else if (gst.state === 'crawl') { face = 'joy'; tilt = 1.45; ly = -0.15; pose = 'crawl'; poseT = 1; }
+    else if (gst.state === 'distress') { face = 'worry'; ly = -0.34; pose = 'distress'; poseT = 1; }
+    else if (gst.spent) { face = 'joy'; pose = 'joy'; poseT = 1; }
+    return { face, yOff, tilt, ly, pose, poseT };
   };
 
   /* one captured frame — called from the render loop, never from the sim */
@@ -50,7 +61,8 @@
       const p = night.guestPos(gst);
       const po = R.poseOf(gst);
       R.roster[gst.id] = gst.arch;
-      gs.push([gst.id, p.x, po.yOff + po.ly, p.z, Math.atan2(p.dirX, p.dirZ), po.tilt, FACES.indexOf(po.face)]);
+      gs.push([gst.id, p.x, po.yOff + po.ly, p.z, Math.atan2(p.dirX, p.dirZ), po.tilt, FACES.indexOf(po.face),
+        POSES.indexOf(po.pose), Math.round(po.poseT * 100) / 100]);
     }
     R.frames.push({ t: night.t, g: gs });
     const cutoff = night.t - C.bufferS;
@@ -98,13 +110,16 @@
   }
 
   /* an interpolated frame at playback time tt (seconds into the take) */
+  function plain(e) {
+    return { id: e[0], x: e[1], y: e[2], z: e[3], ry: e[4], tilt: e[5], face: FACES[e[6]] || 'calm', pose: POSES[e[7]] || 'walk', poseT: e[8] || 0 };
+  }
   R.frameAt = function (take, tt) {
     const fr = take.frames;
     if (!fr.length) return [];
-    if (tt <= fr[0].t) return fr[0].g.map(e => ({ id: e[0], x: e[1], y: e[2], z: e[3], ry: e[4], tilt: e[5], face: FACES[e[6]] || 'calm' }));
+    if (tt <= fr[0].t) return fr[0].g.map(plain);
     let i = 1;
     while (i < fr.length && fr[i].t < tt) i++;
-    if (i >= fr.length) return fr[fr.length - 1].g.map(e => ({ id: e[0], x: e[1], y: e[2], z: e[3], ry: e[4], tilt: e[5], face: FACES[e[6]] || 'calm' }));
+    if (i >= fr.length) return fr[fr.length - 1].g.map(plain);
     const a = fr[i - 1], b = fr[i];
     const u = (tt - a.t) / Math.max(1e-5, b.t - a.t);
     const bmap = {};
@@ -112,7 +127,7 @@
     const out = [];
     for (const e of a.g) {
       const n = bmap[e[0]];
-      if (!n) { out.push({ id: e[0], x: e[1], y: e[2], z: e[3], ry: e[4], tilt: e[5], face: FACES[e[6]] || 'calm' }); continue; }
+      if (!n) { out.push(plain(e)); continue; }
       out.push({
         id: e[0],
         x: e[1] + (n[1] - e[1]) * u,
@@ -120,7 +135,9 @@
         z: e[3] + (n[3] - e[3]) * u,
         ry: e[4] + shortAngle(e[4], n[4]) * u,
         tilt: e[5] + (n[5] - e[5]) * u,
-        face: FACES[(u < 0.5 ? e[6] : n[6])] || 'calm'
+        face: FACES[(u < 0.5 ? e[6] : n[6])] || 'calm',
+        pose: POSES[(u < 0.5 ? e[7] : n[7])] || 'walk',
+        poseT: (e[8] || 0) + ((n[8] || 0) - (e[8] || 0)) * u
       });
     }
     return out;

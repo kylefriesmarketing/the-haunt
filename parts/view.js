@@ -484,45 +484,169 @@
     }
   };
 
-  /* ---------- guests ---------- */
-  function makeGuestMesh(archKey) {
-    const D = H.DATA;
-    const arch = D.ARCHETYPES[archKey];
-    const grp = new THREE.Group();
+  /* ---------- guests: the little people ----------
+     Seven shared geometries, a pooled material set, and a gait driven by DISTANCE TRAVELED —
+     never wall-clock — so the walk is identical live, on the co-op wire, and on the tape
+     (including a paused tape: dist 0 means everybody stands still). */
+
+  function mergeGeo(list) {          // r128-safe: BufferGeometryUtils is an examples module, not bundled
+    const pos = [], norm = [];
+    for (const g0 of list) {
+      const g1 = g0.toNonIndexed();
+      pos.push.apply(pos, g1.attributes.position.array);
+      norm.push.apply(norm, g1.attributes.normal.array);
+    }
+    const out = new THREE.BufferGeometry();
+    out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    out.setAttribute('normal', new THREE.Float32BufferAttribute(norm, 3));
+    return out;
+  }
+  let RIG_GEO = null;
+  function rigGeo() {
+    if (RIG_GEO) return RIG_GEO;
+    const R = H.DATA.RIG;
+    const leg = new THREE.BoxGeometry(R.legW, R.legH, R.legW + 0.01); leg.translate(0, -R.legH / 2, 0);
+    const foot = new THREE.BoxGeometry(R.legW, 0.09, R.footL); foot.translate(0, -R.legH + 0.045, R.footL * 0.22);
+    const arm = new THREE.BoxGeometry(R.armW, R.armH, R.armW + 0.01); arm.translate(0, -R.armH / 2, 0);
+    RIG_GEO = {
+      leg: mergeGeo([leg, foot]),                                   // origin at the hip
+      arm,                                                          // origin at the shoulder
+      torso: new THREE.BoxGeometry(1, 1, 1),                        // scaled per build
+      head: new THREE.SphereGeometry(R.headR, 10, 8),
+      hair: new THREE.SphereGeometry(R.headR * 1.06, 8, 5, 0, Math.PI * 2, 0, Math.PI * 0.55),
+      face: new THREE.PlaneGeometry(0.3, 0.3),
+      phone: new THREE.PlaneGeometry(0.09, 0.13)
+    };
+    return RIG_GEO;
+  }
+
+  const MAT_POOL = new Map();
+  function pmat(hex, eHex, eI) {
+    const key = hex + '|' + (eHex || 0) + '|' + (eI || 0);
+    let m = MAT_POOL.get(key);
+    if (!m) { m = new THREE.MeshLambertMaterial({ color: hex, emissive: eHex || 0x000000, emissiveIntensity: eI || 0 }); MAT_POOL.set(key, m); }
+    return m;
+  }
+  function shadeHex(hex, f) {
+    const r = Math.min(255, ((hex >> 16) & 255) * f) | 0, g2 = Math.min(255, ((hex >> 8) & 255) * f) | 0, b = Math.min(255, (hex & 255) * f) | 0;
+    return (r << 16) | (g2 << 8) | b;
+  }
+
+  function makeGuestMesh(archKey, id) {
+    const D = H.DATA, R = D.RIG, G = rigGeo();
+    const arch = D.ARCHETYPES[archKey] || D.ARCHETYPES.chain;
+    const B = D.ARCH_BUILD[archKey] || {};
     const s = arch.size;
-    const bodyMat = new THREE.MeshLambertMaterial({ color: arch.tint, emissive: arch.tint, emissiveIntensity: 0.18 });
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.26 * s, 0.3 * s, 0.9 * s, 8), bodyMat);
-    body.position.y = 0.65 * s; grp.add(body);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.24 * s, 10, 10), mat(0xe8c8a0));
-    head.position.y = 1.32 * s; grp.add(head);
-    const face = new THREE.Mesh(new THREE.PlaneGeometry(0.3 * s, 0.3 * s), new THREE.MeshBasicMaterial({ map: FACES.calm, transparent: true }));
-    face.position.set(0, 1.32 * s, 0.235 * s); grp.add(face);
-    if (archKey === 'flannel') { const hat = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.26, 0.16, 8), mat(0xb0402c)); hat.position.y = 1.56 * s; grp.add(hat); }
-    if (archKey === 'grandma') { const bun = new THREE.Mesh(new THREE.SphereGeometry(0.1, 6, 6), mat(0xdddddd)); bun.position.set(0, 1.52 * s, -0.1); grp.add(bun); }
-    // nerve bar sprite
+    const rng = H.makeRng((((id || 1) * 2654435761) ^ 0x9e3779b9) >>> 0);   // seeded by guest id: same look live, on the wire, on the tape
+    const skin = D.LOOK.skins[rng.int(0, D.LOOK.skins.length - 1)];
+    const hairC = D.LOOK.hairs[rng.int(0, D.LOOK.hairs.length - 1)];
+    const tint = shadeHex(arch.tint, D.LOOK.outfitShades[rng.int(0, 2)]);
+    const pants = D.LOOK.pants[rng.int(0, D.LOOK.pants.length - 1)];
+
+    const grp = new THREE.Group(); grp.scale.setScalar(s);
+    const legL = new THREE.Mesh(G.leg, pmat(pants)); legL.position.set(-R.torsoW * 0.28, R.legH, 0); grp.add(legL);
+    const legR = new THREE.Mesh(G.leg, pmat(pants)); legR.position.set(R.torsoW * 0.28, R.legH, 0); grp.add(legR);
+    const chest = new THREE.Group(); chest.position.y = R.legH; grp.add(chest);
+    const torso = new THREE.Mesh(G.torso, pmat(tint, tint, 0.18));
+    torso.scale.set(R.torsoW * (B.shoulders || 1), R.torsoH, R.torsoD * (B.belly || 1));
+    torso.position.y = R.torsoH / 2; chest.add(torso);
+    const head = new THREE.Mesh(G.head, pmat(skin));
+    head.position.y = R.headY; head.scale.setScalar(B.head || 1); chest.add(head);
+    const face = new THREE.Mesh(G.face, new THREE.MeshBasicMaterial({ map: FACES.calm, transparent: true }));
+    face.position.z = R.headR * 0.98; head.add(face);
+    let hairMesh;
+    if (B.hat === 'cap') { hairMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.26, 0.16, 8), pmat(0xb0402c)); hairMesh.position.y = R.headR * 0.9; }
+    else if (B.hair === 'bun') { hairMesh = new THREE.Mesh(new THREE.SphereGeometry(0.1, 6, 6), pmat(0xdddddd)); hairMesh.position.set(0, R.headR * 0.7, -R.headR * 0.6); }
+    else { hairMesh = new THREE.Mesh(G.hair, pmat(hairC)); if (B.hair === 'long') hairMesh.scale.y = 1.7; }
+    head.add(hairMesh);
+    const shoulderX = (R.torsoW * (B.shoulders || 1)) / 2 + R.armW / 2;
+    const armL = new THREE.Mesh(G.arm, pmat(tint, tint, 0.12)); armL.position.set(-shoulderX, R.torsoH * 0.94, 0); chest.add(armL);
+    const armR = new THREE.Mesh(G.arm, pmat(tint, tint, 0.12)); armR.position.set(shoulderX, R.torsoH * 0.94, 0); chest.add(armR);
+    let phone = null;
+    if (B.phone) { phone = new THREE.Mesh(G.phone, new THREE.MeshBasicMaterial({ color: 0xbcd8ff })); phone.position.set(0.1, R.torsoH * 0.72, R.torsoD * 0.9); phone.rotation.x = -0.5; chest.add(phone); }
+    if (B.sash) { const sash = new THREE.Mesh(G.torso, pmat(0xf0e0a0, 0xf0e0a0, 0.25)); sash.scale.set(R.torsoW * 1.06, 0.07, R.torsoD * 1.08); sash.position.y = R.torsoH * 0.62; sash.rotation.z = 0.5; chest.add(sash); }
+    // nerve bar — unchanged mechanics; scale compensated so body scale never shrinks the bar
     const bc = document.createElement('canvas'); bc.width = 64; bc.height = 10;
     const bctx = bc.getContext('2d');
     const btex = new THREE.CanvasTexture(bc);
     const bar = new THREE.Sprite(new THREE.SpriteMaterial({ map: btex, depthTest: false, transparent: true }));
-    bar.scale.set(0.85, 0.14, 1); bar.position.y = 1.85 * s; bar.renderOrder = 9; bar.visible = false;
+    bar.scale.set(0.85 / s, 0.14 / s, 1); bar.position.y = R.barY; bar.renderOrder = 9; bar.visible = false;
     grp.add(bar);
     scene.add(grp);
-    return { grp, face, bar, bctx, btex, s, headBase: 1.32 * s };
+    return {
+      grp, chest, head, face, hairMesh, armL, armR, legL, legR, phone, bar, bctx, btex, s,
+      stoop: B.stoop || 0, slouch: B.slouch || 0,
+      lx: null, lz: null, walkD: ((id || 1) % 7) * 0.21, spd: 0, blend: 0, _far: null
+    };
+  }
+
+  /* the gait and the poses. phase is pure distance; dt only shapes amplitude and the release blend. */
+  function applyRig(m, e, dt) {
+    const R = H.DATA.RIG;
+    if (m.lx === null) { m.lx = e.x; m.lz = e.z; }
+    const dist = Math.hypot(e.x - m.lx, e.z - m.lz);
+    m.lx = e.x; m.lz = e.z;
+    m.walkD += dist;
+    const v = dist / Math.max(dt, 1 / 240);
+    m.spd += (Math.min(v, 3.4) - m.spd) * Math.min(1, dt * 6);
+    const ph = (m.walkD / R.stride) * Math.PI * 2;
+    const mo = reducedMotion ? 0.4 : 1;
+    const gait = Math.min(1, m.spd / 1.15) * mo;
+    const joy = e.pose === 'joy';
+    const aSw = (joy ? R.joyArm : 1) * R.swingArm * gait, lSw = R.swingLeg * gait;
+    let aLx = Math.sin(ph) * aSw, aRx = -Math.sin(ph) * aSw, aLz = 0.06, aRz = -0.06;
+    let lLx = -Math.sin(ph) * lSw, lRx = Math.sin(ph) * lSw;
+    let hx = m.stoop, cx = m.stoop + m.slouch;
+    let bob = Math.abs(Math.sin(ph)) * (joy ? R.joyBob : R.bobAmp) * gait;
+    const T = {
+      flinch:   { aLx: -1.2, aRx: -1.2, aLz: 0.55, aRz: -0.55, hx: -0.25 },
+      scream:   { aLx: -2.95, aRx: -2.95, aLz: 0.34, aRz: -0.34, hx: -0.4 },
+      gotem:    { aLx: -2.1, aRx: -1.3, aLz: 0.4, aRz: -0.2, hx: -0.3, lLx: -0.6 },
+      dropped:  { aLx: 0.6, aRx: 0.55, aLz: 1.15, aRz: -1.15, lLx: -1.35, lRx: -1.2, hx: -0.2 },
+      melt:     { aLx: -1.4 + Math.sin(ph * 2) * 0.5, aRx: -1.4 - Math.sin(ph * 2) * 0.5, lLx: 0.9, lRx: 0.9, hx: -0.9 },
+      crawl:    { aLx: -1.5 + Math.sin(ph * 2) * R.crawlReach * mo, aRx: -1.5 - Math.sin(ph * 2) * R.crawlReach * mo, lLx: 0.9, lRx: 0.9, hx: -0.9 },
+      distress: { lLx: -2.15, lRx: -2.15, aLx: -1.85, aRx: -1.85, aLz: 0.85, aRz: -0.85, hx: 0.5 },
+      huh:      { aLx: -0.55, aRx: -0.55, aLz: 1.05, aRz: -1.05 }
+    }[e.pose];
+    const want = T ? Math.min(1, (e.poseT || 0) * R.snapIn) : 0;   // snap-in rides SIM time, so the tape matches
+    m.blend += (want - m.blend) * Math.min(1, dt * R.release);
+    const k = m.blend, mix = (a, b) => a + (b - a) * k;
+    if (T) {
+      aLx = mix(aLx, T.aLx !== undefined ? T.aLx : 0); aRx = mix(aRx, T.aRx !== undefined ? T.aRx : 0);
+      aLz = mix(aLz, T.aLz !== undefined ? T.aLz : 0.06); aRz = mix(aRz, T.aRz !== undefined ? T.aRz : -0.06);
+      lLx = mix(lLx, T.lLx !== undefined ? T.lLx : 0); lRx = mix(lRx, T.lRx !== undefined ? T.lRx : 0);
+      hx = mix(hx, (T.hx || 0) + m.stoop); bob *= (1 - k);
+    }
+    m.armL.rotation.set(aLx, 0, aLz); m.armR.rotation.set(aRx, 0, aRz);
+    m.legL.rotation.x = lLx; m.legR.rotation.x = lRx;
+    m.head.rotation.x = hx * 0.6;
+    m.chest.rotation.x = cx * 0.5 + (T ? k * (T.hx || 0) * 0.3 : 0);
+    if (m.phone) m.phone.visible = !T;                             // the too-cool teen pockets it when they break
+    return bob;
   }
 
   /* THE one place guests get drawn. Three callers feed it the same shape:
      the live sim (syncGuests), the tape (replayFrame), and the wire (a co-op guest's snapshot).
      entry: { id, arch, x, y, z, ry, tilt, face, bob?, nerve?, distress? } */
-  V.renderGuests = function (list, xray) {
+  V.renderGuests = function (list, xray, dtIn) {
+    const dt = dtIn === undefined ? 0.016 : Math.max(0.0005, Math.min(0.1, dtIn));
     const seen = {};
     for (const g of list) {
       seen[g.id] = true;
       let m = guestMeshes[g.id];
-      if (!m) m = guestMeshes[g.id] = makeGuestMesh(g.arch || 'chain');
+      if (!m) m = guestMeshes[g.id] = makeGuestMesh(g.arch || 'chain', g.id);
       const bob = reducedMotion ? (g.bob || 0) * 0.4 : (g.bob || 0);
-      m.grp.position.set(g.x, bob + (g.y || 0), g.z);
+      const rigBob = applyRig(m, g, dt);
+      m.grp.position.set(g.x, bob + rigBob + (g.y || 0), g.z);
       m.grp.rotation.y = g.ry; m.grp.rotation.x = g.tilt || 0;
       m.face.material.map = FACES[g.face] || FACES.calm;
+      // LOD: past RIG.lodM the limbs stop drawing; torso+head+face carry the read
+      const far = camera.position.distanceTo(m.grp.position) > H.DATA.RIG.lodM;
+      if (far !== m._far) {
+        m._far = far;
+        m.armL.visible = m.armR.visible = m.legL.visible = m.legR.visible = !far;
+        if (m.hairMesh) m.hairMesh.visible = !far;
+      }
       const showBar = !!xray && g.nerve !== undefined && g.nerve !== null;
       m.bar.visible = showBar;
       if (showBar) {
@@ -536,12 +660,18 @@
       }
     }
     for (const id of Object.keys(guestMeshes)) {
-      if (!seen[id]) { scene.remove(guestMeshes[id].grp); delete guestMeshes[id]; }
+      if (!seen[id]) { disposeGuest(guestMeshes[id]); delete guestMeshes[id]; }
     }
   };
 
+  /* only what is per-guest: the two canvas-backed materials. geometry and body mats are shared. */
+  function disposeGuest(m) {
+    try { m.btex.dispose(); m.bar.material.dispose(); m.face.material.dispose(); } catch (e) { }
+    scene.remove(m.grp);
+  }
+
   /* the live sim's view of the room */
-  V.syncGuests = function (night, xray) {
+  V.syncGuests = function (night, xray, dt) {
     const list = [];
     for (const gst of night.guests) {
       if (gst.out) continue;
@@ -550,14 +680,15 @@
       list.push({
         id: gst.id, arch: gst.arch, x: p.x, y: po.ly, z: p.z,
         ry: Math.atan2(p.dirX, p.dirZ), tilt: po.tilt, face: po.face, bob: po.yOff,
+        pose: po.pose, poseT: po.poseT,
         nerve: gst.nerve / gst.pool, distress: gst.state === 'distress'
       });
     }
-    V.renderGuests(list, xray);
+    V.renderGuests(list, xray, dt);
   };
 
   V.clearGuests = function () {
-    for (const id of Object.keys(guestMeshes)) { scene.remove(guestMeshes[id].grp); delete guestMeshes[id]; }
+    for (const id of Object.keys(guestMeshes)) { disposeGuest(guestMeshes[id]); delete guestMeshes[id]; }
   };
 
   /* ---------- the other monsters (co-op): silhouette first, name over the hood ---------- */
@@ -605,11 +736,12 @@
   V.clearCrew = function () { V.syncCrew([]); };
 
   /* ---------- the tape: rebuild the room from a recorded frame ---------- */
-  V.replayFrame = function (take, guests) {
+  V.replayFrame = function (take, guests, dt) {
     V.renderGuests(guests.map(gr => ({
       id: gr.id, arch: take.roster[gr.id] || 'chain',
-      x: gr.x, y: gr.y, z: gr.z, ry: gr.ry, tilt: gr.tilt, face: gr.face
-    })), false);
+      x: gr.x, y: gr.y, z: gr.z, ry: gr.ry, tilt: gr.tilt, face: gr.face,
+      pose: gr.pose, poseT: gr.poseT
+    })), false, dt);
     for (const id of Object.keys(nodeRings)) nodeRings[id].material.opacity = 0;   // no HUD furniture on the tape
   };
 

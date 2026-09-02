@@ -167,13 +167,13 @@
         else if (pw > 6) kind = 'flinch';
         if (kind) {
           gst.state = 'react'; gst.reactKind = kind;
-          gst.reactT = kind === 'dropped' ? 2.6 : kind === 'gotem' ? 1.6 : kind === 'scream' ? 1.2 : 0.7;
+          gst.reactT = D().POSE.durs[kind] || 0.7;
           gst.delightPend += pw * D().GUEST.delightConvert * arch.delightM;
           if (kind) gst.hits = (gst.hits || 0) + 1;
           if (kind === 'dropped') {
             dropped++; N.tally.dropped++; gst.spent = true;
             group.prime = Math.min(100, group.prime + D().GUEST.primeOnDrop);
-            if (gradeMult >= 1.35 && gst.nerve < gst.pool * R.dropped - 24 && !arch.soft) { gst.reactKind = 'melt'; gst.reactT = 4.2; melted++; N.tally.melted++; }
+            if (gradeMult >= 1.35 && gst.nerve < gst.pool * R.dropped - 24 && !arch.soft) { gst.reactKind = 'melt'; gst.reactT = D().POSE.durs.melt; melted++; N.tally.melted++; }
           } else if (kind === 'gotem') { gotem++; N.tally.gotem++; group.prime = Math.min(100, group.prime + D().GUEST.primeOnScream); }
           else if (kind === 'scream') { screams++; N.tally.scream++; group.prime = Math.min(100, group.prime + D().GUEST.primeOnScream); }
           else { flinches++; N.tally.flinch++; }

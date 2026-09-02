@@ -256,6 +256,49 @@ console.log('\n[8] the lost hello (the bug Kyle hit: a lobby with nobody in it)'
   ok(got === 1, 'and the doors open for them', 'start received');
 }
 
+console.log('\n[8b] the theatre survives the wire (poses, not just positions)');
+{
+  const N = mkNight();
+  let guard = 0, sawReact = false, snap = null;
+  while (!N.done && guard++ < 60 * 30 * 20) {
+    for (const slotId of Object.keys(N.stations)) {
+      const st = N.stations[slotId];
+      if (st.type === 'flashCam' || st.type === 'fogBurst') continue;
+      for (const grp of N.groups) {
+        if (grp.mergedInto) continue;
+        const l = leaderS(grp);
+        if (l !== null && Math.abs(l - st.node.s) < 0.5) { N.triggerStation(slotId); break; }
+      }
+    }
+    N.tick(1 / 30); N.events.length = 0;
+    if (N.guests.some(g => !g.out && g.state === 'react')) {
+      snap = JSON.parse(JSON.stringify(H.Net.snapshot(N, {}, [])));   // through the wire, verbatim
+      sawReact = true; break;
+    }
+  }
+  ok(sawReact, 'caught the room mid-reaction');
+  const rebuilt = H.Net.readGuests(snap);
+  const live = N.guests.filter(g => !g.out);
+  let poseMatches = true, sawNonWalk = false, badT = false;
+  for (const g of live) {
+    const r = rebuilt.find(x => x.id === g.id);
+    if (!r) { poseMatches = false; continue; }
+    const want = H.Replay.poseOf(g);
+    if (r.pose !== want.pose) poseMatches = false;
+    if (r.pose !== 'walk') sawNonWalk = true;
+    if (!(r.poseT >= 0 && r.poseT <= 1)) badT = true;
+  }
+  ok(poseMatches, 'every guest arrives on the wire striking the pose the host sees');
+  ok(sawNonWalk, 'and at least one of them is mid-scare', rebuilt.map(r => r.pose).filter(p => p !== 'walk').join(','));
+  ok(!badT, 'poseT stays inside 0..1 after the round trip');
+  ok(H.Replay.POSES.length === 10, 'the pose vocabulary is the single shared authority', H.Replay.POSES.length + ' poses');
+  // an OLD client reading a NEW snapshot must degrade, never throw
+  const trimmed = { g: snap.g.map(e => e.slice(0, 11)) };
+  const old = H.Net.readGuests(trimmed);
+  ok(old.length === rebuilt.length && old.every(o => o.pose === 'walk'),
+    'a stale client just sees everyone walking instead of crashing');
+}
+
 console.log('\n[9] stale builds get named, not suffered');
 {
   H.Net.test.reset();

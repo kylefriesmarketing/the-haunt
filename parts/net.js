@@ -275,6 +275,7 @@
 
   N.snapshot = function (night, deltas, crew) {
     const AK = archKeys();
+    const PO = H.Replay.POSES;
     const gs = [];
     for (const gst of night.guests) {
       if (gst.out) continue;
@@ -282,7 +283,8 @@
       const po = H.Replay.poseOf(gst);
       gs.push([gst.id, AK.indexOf(gst.arch), r2(p.x), r2(po.ly), r2(p.z),
         r2(Math.atan2(p.dirX, p.dirZ)), r2(po.tilt), FACES.indexOf(po.face),
-        r2(gst.nerve / gst.pool), r2(po.yOff), gst.state === 'distress' ? 1 : 0]);
+        r2(gst.nerve / gst.pool), r2(po.yOff), gst.state === 'distress' ? 1 : 0,
+        PO.indexOf(po.pose), r2(po.poseT)]);
     }
     const st = {};
     for (const id of Object.keys(night.stations)) st[id] = r2(Math.max(0, night.stations[id].readyAt - night.t));
@@ -299,7 +301,8 @@
     return (snap.g || []).map(e => ({
       id: e[0], arch: AK[e[1]] || 'chain', x: e[2], y: e[3], z: e[4],
       ry: e[5], tilt: e[6], face: FACES[e[7]] || 'calm', nerve: e[8], bob: e[9], distress: !!e[10],
-      state: e[10] ? 'distress' : 'walk'
+      state: e[10] ? 'distress' : 'walk',
+      pose: (H.Replay.POSES[e[11]] || 'walk'), poseT: e[12] || 0
     }));
   };
 

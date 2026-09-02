@@ -159,6 +159,39 @@
   D.TECH_STILL = 0.12;               // m/s under which you count as not moving at all
   D.COMEDY_RESET = { cooldown: 16, nerveHeal: 18, primeCost: 25 }; // the walkie gag (Q)
 
+  /* ---------------- the little people: rig, look, poses. View-only except POSE.durs (sim reads those). ---------------- */
+  D.RIG = {
+    legH: 0.52, legW: 0.15, footL: 0.30,          // leg pivots at hip; foot merged into leg geo
+    torsoW: 0.36, torsoH: 0.50, torsoD: 0.21,
+    armH: 0.46, armW: 0.11,
+    headR: 0.23, headY: 0.80,                     // head center, local to chest group
+    barY: 1.85,                                   // nerve bar height
+    stride: 1.35,                                 // meters of travel per full gait cycle
+    swingLeg: 0.55, swingArm: 0.38, bobAmp: 0.028,// radians / radians / meters at full walk speed
+    snapIn: 6,                                    // pose reaches full at poseT = 1/snapIn (sim-time, tape-true)
+    release: 10,                                  // view-side blend chase rate out of a pose
+    lodM: 20,                                     // beyond this, limbs+hair stop drawing
+    joyArm: 1.6, joyBob: 0.05, crawlReach: 0.9
+  };
+  D.LOOK = {
+    skins:  [0xf0cfa8, 0xe8c8a0, 0xd9b088, 0xc49a6c, 0xa8764e, 0x8a5c3a],
+    hairs:  [0x2a1c10, 0x483020, 0x6a4a28, 0x8a6a3a, 0xb89858, 0x3a3a42, 0xd8d8d8, 0x7a2c1c],
+    outfitShades: [0.78, 1.0, 1.22],              // quantized so materials pool
+    pants:  [0x2e3440, 0x3a3226, 0x4a3a2c, 0x263042, 0x3c2e3a, 0x35402e]
+  };
+  D.ARCH_BUILD = {                                 // per-archetype silhouette, multiplies D.RIG
+    flannel:      { shoulders: 1.30, belly: 1.12, hat: 'cap' },
+    dad:          { shoulders: 1.05, belly: 1.18 },
+    grandma:      { shoulders: 0.82, stoop: 0.16, hair: 'bun' },
+    kid:          { shoulders: 0.90, head: 1.30 },
+    toocool:      { slouch: 0.10, phone: true },
+    bachelorette: { hair: 'long', sash: true },
+    chain: {}, date: {}
+  };
+  D.POSE = {
+    durs: { flinch: 0.7, scream: 1.2, gotem: 1.6, dropped: 2.6, melt: 4.2 }  // sim reactT — sim.js reads these
+  };
+
   /* timing grades (beat window, seconds from perfect center) */
   D.GRADES = [
     { id: 'perfect', within: 0.55, mult: 1.5, label: 'PERFECT' },
