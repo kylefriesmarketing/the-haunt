@@ -515,7 +515,9 @@
       head: new THREE.SphereGeometry(R.headR, 10, 8),
       hair: new THREE.SphereGeometry(R.headR * 1.06, 8, 5, 0, Math.PI * 2, 0, Math.PI * 0.55),
       face: new THREE.PlaneGeometry(0.3, 0.3),
-      phone: new THREE.PlaneGeometry(0.09, 0.13)
+      phone: new THREE.PlaneGeometry(0.09, 0.13),
+      cap: new THREE.CylinderGeometry(R.capR[0], R.capR[1], R.capR[2], 8),
+      bun: new THREE.SphereGeometry(R.bunR, 6, 6)
     };
     return RIG_GEO;
   }
@@ -555,8 +557,8 @@
     const face = new THREE.Mesh(G.face, new THREE.MeshBasicMaterial({ map: FACES.calm, transparent: true }));
     face.position.z = R.headR * 0.98; head.add(face);
     let hairMesh;
-    if (B.hat === 'cap') { hairMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.26, 0.16, 8), pmat(0xb0402c)); hairMesh.position.y = R.headR * 0.9; }
-    else if (B.hair === 'bun') { hairMesh = new THREE.Mesh(new THREE.SphereGeometry(0.1, 6, 6), pmat(0xdddddd)); hairMesh.position.set(0, R.headR * 0.7, -R.headR * 0.6); }
+    if (B.hat === 'cap') { hairMesh = new THREE.Mesh(G.cap, pmat(D.LOOK.capColor)); hairMesh.position.y = R.headR * 0.9; }
+    else if (B.hair === 'bun') { hairMesh = new THREE.Mesh(G.bun, pmat(D.LOOK.bunColor)); hairMesh.position.set(0, R.headR * 0.7, -R.headR * 0.6); }
     else { hairMesh = new THREE.Mesh(G.hair, pmat(hairC)); if (B.hair === 'long') hairMesh.scale.y = 1.7; }
     head.add(hairMesh);
     const shoulderX = (R.torsoW * (B.shoulders || 1)) / 2 + R.armW / 2;
@@ -576,7 +578,8 @@
     return {
       grp, chest, head, face, hairMesh, armL, armR, legL, legR, phone, bar, bctx, btex, s,
       stoop: B.stoop || 0, slouch: B.slouch || 0,
-      lx: null, lz: null, walkD: ((id || 1) % 7) * 0.21, spd: 0, blend: 0, _far: null
+      lx: null, lz: null, walkD: ((id || 1) % 7) * 0.21, spd: 0, blend: 0, _far: null,
+      distAcc: 0, timeAcc: 0, fresh: true, _barKey: null
     };
   }
 
@@ -587,12 +590,14 @@
     const dist = Math.hypot(e.x - m.lx, e.z - m.lz);
     m.lx = e.x; m.lz = e.z;
     m.walkD += dist;
-    const v = dist / Math.max(dt, 1 / 240);
-    m.spd += (Math.min(v, 3.4) - m.spd) * Math.min(1, dt * 6);
+    m.distAcc += dist; m.timeAcc += dt;
+    if (m.timeAcc >= R.speedWinS) { m.spd = Math.min(3.4, m.distAcc / m.timeAcc); m.distAcc = 0; m.timeAcc = 0; }
     const ph = (m.walkD / R.stride) * Math.PI * 2;
     const mo = reducedMotion ? 0.4 : 1;
     const gait = Math.min(1, m.spd / 1.15) * mo;
     const joy = e.pose === 'joy';
+    // a melting guest is stationary, so the distance phase is frozen — drive the writhe off poseT
+    const mThrash = Math.sin((e.poseT || 0) * 18) * R.meltThrash * mo;
     const aSw = (joy ? R.joyArm : 1) * R.swingArm * gait, lSw = R.swingLeg * gait;
     let aLx = Math.sin(ph) * aSw, aRx = -Math.sin(ph) * aSw, aLz = 0.06, aRz = -0.06;
     let lLx = -Math.sin(ph) * lSw, lRx = Math.sin(ph) * lSw;
@@ -603,13 +608,14 @@
       scream:   { aLx: -2.95, aRx: -2.95, aLz: 0.34, aRz: -0.34, hx: -0.4 },
       gotem:    { aLx: -2.1, aRx: -1.3, aLz: 0.4, aRz: -0.2, hx: -0.3, lLx: -0.6 },
       dropped:  { aLx: 0.6, aRx: 0.55, aLz: 1.15, aRz: -1.15, lLx: -1.35, lRx: -1.2, hx: -0.2 },
-      melt:     { aLx: -1.4 + Math.sin(ph * 2) * 0.5, aRx: -1.4 - Math.sin(ph * 2) * 0.5, lLx: 0.9, lRx: 0.9, hx: -0.9 },
+      melt:     { aLx: -1.4 + mThrash, aRx: -1.4 - mThrash, lLx: 0.9, lRx: 0.9, hx: -0.9 },
       crawl:    { aLx: -1.5 + Math.sin(ph * 2) * R.crawlReach * mo, aRx: -1.5 - Math.sin(ph * 2) * R.crawlReach * mo, lLx: 0.9, lRx: 0.9, hx: -0.9 },
       distress: { lLx: -2.15, lRx: -2.15, aLx: -1.85, aRx: -1.85, aLz: 0.85, aRz: -0.85, hx: 0.5 },
       huh:      { aLx: -0.55, aRx: -0.55, aLz: 1.05, aRz: -1.05 }
     }[e.pose];
     const want = T ? Math.min(1, (e.poseT || 0) * R.snapIn) : 0;   // snap-in rides SIM time, so the tape matches
-    m.blend += (want - m.blend) * Math.min(1, dt * R.release);
+    if (m.fresh) { m.blend = want; m.fresh = false; }        // tape restart / fresh join: strike it immediately
+    else m.blend += (want - m.blend) * Math.min(1, dt * R.release);
     const k = m.blend, mix = (a, b) => a + (b - a) * k;
     if (T) {
       aLx = mix(aLx, T.aLx !== undefined ? T.aLx : 0); aRx = mix(aRx, T.aRx !== undefined ? T.aRx : 0);
@@ -640,23 +646,27 @@
       m.grp.position.set(g.x, bob + rigBob + (g.y || 0), g.z);
       m.grp.rotation.y = g.ry; m.grp.rotation.x = g.tilt || 0;
       m.face.material.map = FACES[g.face] || FACES.calm;
-      // LOD: past RIG.lodM the limbs stop drawing; torso+head+face carry the read
+      // LOD: past RIG.lodM the limbs and the nerve bar stop drawing; torso+head+face carry the read
       const far = camera.position.distanceTo(m.grp.position) > H.DATA.RIG.lodM;
       if (far !== m._far) {
         m._far = far;
         m.armL.visible = m.armR.visible = m.legL.visible = m.legR.visible = !far;
         if (m.hairMesh) m.hairMesh.visible = !far;
       }
-      const showBar = !!xray && g.nerve !== undefined && g.nerve !== null;
+      const showBar = !!xray && g.nerve !== undefined && g.nerve !== null && !far;
       m.bar.visible = showBar;
       if (showBar) {
         const w = Math.max(0, Math.min(1, g.nerve));
-        m.bctx.clearRect(0, 0, 64, 10);
-        m.bctx.fillStyle = 'rgba(10,8,4,0.8)'; m.bctx.fillRect(0, 0, 64, 10);
-        m.bctx.fillStyle = w > 0.5 ? '#69d84a' : w > 0.26 ? '#e8c23a' : '#e84a3a';
-        m.bctx.fillRect(1, 1, 62 * w, 8);
-        if (g.distress) { m.bctx.fillStyle = '#fff'; m.bctx.fillRect(0, 0, 64, 10); }
-        m.btex.needsUpdate = true;
+        const barKey = (Math.round(w * 62) | 0) + (g.distress ? 512 : 0);
+        if (barKey !== m._barKey) {                          // only redraw when it actually changed
+          m._barKey = barKey;
+          m.bctx.clearRect(0, 0, 64, 10);
+          m.bctx.fillStyle = 'rgba(10,8,4,0.8)'; m.bctx.fillRect(0, 0, 64, 10);
+          m.bctx.fillStyle = w > 0.5 ? '#69d84a' : w > 0.26 ? '#e8c23a' : '#e84a3a';
+          m.bctx.fillRect(1, 1, 62 * w, 8);
+          if (g.distress) { m.bctx.fillStyle = '#fff'; m.bctx.fillRect(0, 0, 64, 10); }
+          m.btex.needsUpdate = true;
+        }
       }
     }
     for (const id of Object.keys(guestMeshes)) {

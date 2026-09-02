@@ -39,7 +39,7 @@
       }
       else if (gst.reactKind === 'scream') yOff = Math.abs(Math.sin(gst.reactT * 14)) * 0.22;
       else if (gst.reactKind === 'gotem') { yOff = Math.abs(Math.sin(gst.reactT * 12)) * 0.3; tilt = 0.2; }
-      else if (gst.reactKind === 'dropped') { tilt = Math.min(0.55, (2.6 - gst.reactT) * 1.1); ly = -Math.min(0.42, (2.6 - gst.reactT) * 0.9); } // sits like a folding chair now, not a plank
+      else if (gst.reactKind === 'dropped') { tilt = Math.min(0.55, (dur - gst.reactT) * 1.1); ly = -Math.min(0.42, (dur - gst.reactT) * 0.9); } // sits like a folding chair now, not a plank
       else if (gst.reactKind === 'melt') { tilt = 1.45; ly = -0.1; }
     } else if (gst.state === 'crawl') { face = 'joy'; tilt = 1.45; ly = -0.15; pose = 'crawl'; poseT = 1; }
     else if (gst.state === 'distress') { face = 'worry'; ly = -0.34; pose = 'distress'; poseT = 1; }
@@ -61,8 +61,10 @@
       const p = night.guestPos(gst);
       const po = R.poseOf(gst);
       R.roster[gst.id] = gst.arch;
-      gs.push([gst.id, p.x, po.yOff + po.ly, p.z, Math.atan2(p.dirX, p.dirZ), po.tilt, FACES.indexOf(po.face),
-        POSES.indexOf(po.pose), Math.round(po.poseT * 100) / 100]);
+      /* ⚠️ yOff rides its OWN slot: folded into y it bypasses the reducedMotion damping
+         that renderGuests applies to bob, and the tape is the one thing you cannot look away from. */
+      gs.push([gst.id, p.x, po.ly, p.z, Math.atan2(p.dirX, p.dirZ), po.tilt, FACES.indexOf(po.face),
+        POSES.indexOf(po.pose), Math.round(po.poseT * 100) / 100, Math.round(po.yOff * 1000) / 1000]);
     }
     R.frames.push({ t: night.t, g: gs });
     const cutoff = night.t - C.bufferS;
@@ -111,7 +113,7 @@
 
   /* an interpolated frame at playback time tt (seconds into the take) */
   function plain(e) {
-    return { id: e[0], x: e[1], y: e[2], z: e[3], ry: e[4], tilt: e[5], face: FACES[e[6]] || 'calm', pose: POSES[e[7]] || 'walk', poseT: e[8] || 0 };
+    return { id: e[0], x: e[1], y: e[2], z: e[3], ry: e[4], tilt: e[5], face: FACES[e[6]] || 'calm', pose: POSES[e[7]] || 'walk', poseT: e[8] || 0, bob: e[9] || 0 };
   }
   R.frameAt = function (take, tt) {
     const fr = take.frames;
@@ -137,7 +139,8 @@
         tilt: e[5] + (n[5] - e[5]) * u,
         face: FACES[(u < 0.5 ? e[6] : n[6])] || 'calm',
         pose: POSES[(u < 0.5 ? e[7] : n[7])] || 'walk',
-        poseT: (e[8] || 0) + ((n[8] || 0) - (e[8] || 0)) * u
+        poseT: (e[8] || 0) + ((n[8] || 0) - (e[8] || 0)) * u,
+        bob: (e[9] || 0) + ((n[9] || 0) - (e[9] || 0)) * u
       });
     }
     return out;

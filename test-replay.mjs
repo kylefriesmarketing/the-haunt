@@ -96,6 +96,53 @@ console.log('\n[4] the caption');
   ok(!!c.room && !!c.who && c.mag > 0, 'the tape knows what it is', `${c.room} · ${c.who} · ${c.mag}`);
 }
 
+console.log('\n[4b] the tape carries the theatre, damped the same way the live view damps it');
+{
+  H.Replay.reset();
+  const N = mkNight();
+  let guard = 0;
+  while (!N.done && guard++ < 60 * 30 * 20) {
+    for (const [slotId, st] of Object.entries(N.stations)) {
+      if (st.type === 'flashCam' || st.type === 'fogBurst') continue;
+      for (const grp of N.groups) {
+        if (grp.mergedInto) continue;
+        const l = leaderS(grp);
+        if (l !== null && Math.abs(l - st.node.s) < 0.5) { N.triggerStation(slotId); break; }
+      }
+    }
+    N.tick(1 / 30);
+    for (const ev of N.events) if (ev.type === 'scare') H.Replay.mark(N, ev);
+    H.Replay.record(N, 1 / 30);
+    N.events.length = 0;
+  }
+  const take = H.Replay.take;
+  ok(!!take, 'a tape exists to inspect');
+  const mid = H.Replay.frameAt(take, take.hitAt + 0.25);   // just after the hit: someone is bouncing
+  ok(mid.every(g => g.bob !== undefined), 'every taped guest carries bob as its OWN field');
+  const anyBob = mid.some(g => Math.abs(g.bob) > 0.001);
+  ok(anyBob, 'and the reaction bounce actually rides in it', 'max bob ' + Math.max.apply(null, mid.map(g => Math.abs(g.bob))).toFixed(3));
+  /* the whole point: bob must NOT be pre-summed into y, or renderGuests cannot damp it for
+     reduced-motion and the tape plays the bounce at full amplitude. */
+  const bouncing = mid.filter(g => Math.abs(g.bob) > 0.001);
+  ok(bouncing.every(g => Math.abs(g.y) < 0.6 && Math.abs(g.y - g.bob) > 1e-9 || g.y === 0),
+    'bob is not folded into the position channel');
+  ok(mid.every(g => g.poseT >= 0 && g.poseT <= 1), 'poseT survives interpolation inside 0..1');
+}
+
+console.log('\n[4c] the dropped fall curve follows the sim duration, not a copy of it');
+{
+  const g0 = { nerve: 1, pool: 100, state: 'react', reactKind: 'dropped', reactT: 2.5, arch: 'chain' };   // just after the fall begins: the curve is live here, not clamped
+  const base = H.Replay.poseOf(g0);
+  const keep = H.DATA.POSE.durs.dropped;
+  H.DATA.POSE.durs.dropped = keep * 2;                          // retune the sim's react length...
+  const after = H.Replay.poseOf(g0);
+  H.DATA.POSE.durs.dropped = keep;                              // ...and put it straight back
+  ok(Math.abs(after.tilt - base.tilt) > 1e-6 || Math.abs(after.ly - base.ly) > 1e-6,
+    'lengthen the drop and the animation lengthens with it',
+    'tilt ' + base.tilt.toFixed(3) + ' -> ' + after.tilt.toFixed(3));
+  ok(Math.abs(H.Replay.poseOf(g0).tilt - base.tilt) < 1e-9, 'and the restore is exact');
+}
+
 console.log('\n[5] a quiet night leaves no tape');
 {
   H.Replay.reset();

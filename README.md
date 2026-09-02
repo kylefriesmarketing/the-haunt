@@ -64,7 +64,7 @@ next night. Drop in mid-show, leave whenever — the barn keeps running either w
   drop-rate bands (perfect play ≈ 20% dropped, melts rare, complaints 0), crew autopilot,
   soft-scare safety, alarm repro, the '96 rules, season economics. Balance changes ship with
   these numbers or they don't ship. ALL TUNING LIVES IN `parts/data.js`.**
-- **`node test-replay.mjs` — the tape, 13 checks.** The load-bearing one is #1: a *recorded*
+- **`node test-replay.mjs` — the tape, 20 checks.** The load-bearing one is #1: a *recorded*
   night must be byte-identical to an unrecorded one. The recorder only ever READS the night.
 - **`node test-net.mjs` — co-op, 53 checks.** Drives the REAL `net.js` over in-memory wires
   (`Net.test.pair()`, whose `send()` round-trips through JSON like the real transport) against a

@@ -171,13 +171,17 @@
     snapIn: 6,                                    // pose reaches full at poseT = 1/snapIn (sim-time, tape-true)
     release: 10,                                  // view-side blend chase rate out of a pose
     lodM: 20,                                     // beyond this, limbs+hair stop drawing
-    joyArm: 1.6, joyBob: 0.05, crawlReach: 0.9
+    joyArm: 1.6, joyBob: 0.05, crawlReach: 0.9, meltThrash: 0.5,
+    capR: [0.2, 0.26, 0.16], bunR: 0.1,          // shared geometry, not per-guest (GC)
+    speedWinS: 0.2                                // speed is averaged over a window, so a 15Hz
+                                                  // co-op snapshot rate cannot pulse the gait
   };
   D.LOOK = {
     skins:  [0xf0cfa8, 0xe8c8a0, 0xd9b088, 0xc49a6c, 0xa8764e, 0x8a5c3a],
     hairs:  [0x2a1c10, 0x483020, 0x6a4a28, 0x8a6a3a, 0xb89858, 0x3a3a42, 0xd8d8d8, 0x7a2c1c],
     outfitShades: [0.78, 1.0, 1.22],              // quantized so materials pool
-    pants:  [0x2e3440, 0x3a3226, 0x4a3a2c, 0x263042, 0x3c2e3a, 0x35402e]
+    pants:  [0x2e3440, 0x3a3226, 0x4a3a2c, 0x263042, 0x3c2e3a, 0x35402e],
+    capColor: 0xb0402c, bunColor: 0xdddddd
   };
   D.ARCH_BUILD = {                                 // per-archetype silhouette, multiplies D.RIG
     flannel:      { shoulders: 1.30, belly: 1.12, hat: 'cap' },
