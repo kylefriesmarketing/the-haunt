@@ -107,6 +107,15 @@ workspace law). Live at **https://kylefriesmarketing.github.io/the-haunt/**.
   curtain that parts when you come through, the crowd murmur that DIPS as they close on a scare
   (bible §6.1's setup cue, audible), chatter/laugh/shush blips, and ~40 new walkie lines with
   real triggers (first drop, three-perfect streak, lulls, walk-by runs, per-crew banter, the hour).
+- ✅ **M8 set & skin** — the barn from the yard was a black void with two dots; it now has a gradient
+  sky dome, a 320-star `Points` field (140 meshes → 1: the perf win that pays for the rest), a
+  moon halo, treeline silhouettes, a real ROOF (backface-culled, so the interior is untouched),
+  the marquee with its three surviving letters and one that buzzes, sagging string lights, a lit
+  ticket shed, a fence and two trucks in the lot. Inside: per-room floors (dirt / rug / tile /
+  concrete / circus paint / worn plank), three position-hashed wall variants, nine painted signs
+  in the house voice, and a spine lined in raw plywood with penciled panel numbers, spike-tape
+  lane markings at every peek door, and ruthie’s ALWAYS SCARE FORWARD stencil. **Zero new lights**
+  — every glow is emissive plus an additive ground spill.
 - ✅ **M7 the little people** — guests are rigged: torso/arms/legs/head, seeded skin+hair+outfit per
   guest id, a walk cycle driven by DISTANCE TRAVELED (so it is identical live, on the co-op wire
   and on the tape, including a paused tape), and eight reaction poses that read at 10 m — flinch,

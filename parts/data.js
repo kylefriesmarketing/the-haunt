@@ -16,15 +16,15 @@
   D.BARN = { x0: 0, x1: 48, z0: 0, z1: 28, wallH: 3.4, wallT: 0.36 };
 
   D.ROOMS = [
-    { id: 'entry',   name: 'the entry hall',  x0: 2,  x1: 12, z0: 2,  z1: 12, light: 0xffd9a0, lightI: 0.55 },
-    { id: 'corn',    name: 'the corn rows',   x0: 12, x1: 24, z0: 2,  z1: 12, light: 0xffc078, lightI: 0.34 },
-    { id: 'dinner',  name: 'the dinner scene',x0: 24, x1: 36, z0: 2,  z1: 12, light: 0xffb060, lightI: 0.30 },
-    { id: 'surgery', name: 'the surgery',     x0: 36, x1: 46, z0: 2,  z1: 12, light: 0xbfe8ff, lightI: 0.26 },
-    { id: 'passage', name: 'the squeeze',     x0: 44, x1: 46, z0: 12, z1: 16, light: 0xff8888, lightI: 0.22 },
-    { id: 'clown',   name: 'the clown room',  x0: 34, x1: 46, z0: 16, z1: 26, light: 0xffa8d8, lightI: 0.34 },
-    { id: 'cellar',  name: 'the cellar pass', x0: 20, x1: 34, z0: 16, z1: 26, light: 0x9fb8ff, lightI: 0.20 },
-    { id: 'last',    name: 'the last laugh',  x0: 8,  x1: 20, z0: 16, z1: 26, light: 0xffe0a8, lightI: 0.45 },
-    { id: 'lobby',   name: 'the exit lobby',  x0: 2,  x1: 8,  z0: 16, z1: 26, light: 0xffe9c0, lightI: 0.8 }
+    { id: 'entry',   name: 'the entry hall',  x0: 2,  x1: 12, z0: 2,  z1: 12, light: 0xffd9a0, lightI: 0.55, floor: 'plank', frep: [6, 4] },
+    { id: 'corn',    name: 'the corn rows',   x0: 12, x1: 24, z0: 2,  z1: 12, light: 0xffc078, lightI: 0.34, floor: 'dirt', frep: [4, 3] },
+    { id: 'dinner',  name: 'the dinner scene',x0: 24, x1: 36, z0: 2,  z1: 12, light: 0xffb060, lightI: 0.30, floor: 'rug', frep: [1, 1] },
+    { id: 'surgery', name: 'the surgery',     x0: 36, x1: 46, z0: 2,  z1: 12, light: 0xbfe8ff, lightI: 0.26, floor: 'tile', frep: [3, 2.5] },
+    { id: 'passage', name: 'the squeeze',     x0: 44, x1: 46, z0: 12, z1: 16, light: 0xff8888, lightI: 0.22, floor: 'plank', frep: [1, 2] },
+    { id: 'clown',   name: 'the clown room',  x0: 34, x1: 46, z0: 16, z1: 26, light: 0xffa8d8, lightI: 0.34, floor: 'paint', frep: [1, 1] },
+    { id: 'cellar',  name: 'the cellar pass', x0: 20, x1: 34, z0: 16, z1: 26, light: 0x9fb8ff, lightI: 0.20, floor: 'concrete', frep: [3, 2] },
+    { id: 'last',    name: 'the last laugh',  x0: 8,  x1: 20, z0: 16, z1: 26, light: 0xffe0a8, lightI: 0.45, floor: 'plank', frep: [4, 3] },
+    { id: 'lobby',   name: 'the exit lobby',  x0: 2,  x1: 8,  z0: 16, z1: 26, light: 0xffe9c0, lightI: 0.8, floor: 'plankworn', frep: [2, 3] }
   ];
   D.SPINE = { x0: 2, x1: 44, z0: 12, z1: 16 }; // backstage. yours.
 
@@ -323,6 +323,33 @@
   D.CHATTER = { hearM: 18, dip: 0.62, blipGap: [2.6, 7.0], laughChance: 0.55 };
   D.HANDS = { popS: 0.78, leverS: 0.42 };
   D.WALKIE_GAP = 3.4;              // minimum seconds between ambient walkie lines (the feed is warmth, not spam)
+
+  /* view-only: hand-painted boards on the guest side, in the house voice.
+     ⚠️ every 'at' sits on a REAL wall face (inner faces: z 2.18 / z 25.82 / x 45.82) and clear of
+     D.ROUTE — dressRooms asserts both at boot and warns rather than shipping a sign in a doorway. */
+  D.SIGNS = [
+    { at: [6.5, 1.9, 2.2],   ry: 0,          lines: ['no touching.', 'either direction.', 'house rule.'] },
+    { at: [16, 1.9, 2.2],    ry: 0,          lines: ['please stay out', 'of the corn.', 'the corn was here first.'] },
+    { at: [27.5, 1.9, 2.2],  ry: 0,          lines: ['dinner is served', 'nightly. it is', 'never finished.'] },
+    { at: [38.5, 1.9, 2.2],  ry: 0,          lines: ['the doctor is in.', 'the doctor has', 'always been in.'] },
+    { at: [40, 1.9, 25.78],  ry: Math.PI,    lines: ['the town asked', 'for this room.', 'the town knows what it did.'] },
+    { at: [27, 1.9, 25.78],  ry: Math.PI,    lines: ['mind the step.', 'the step minds you.'] },
+    { at: [14, 1.9, 16.22],  ry: 0,          lines: ['you made it.', 'everyone makes it.', 'that’s the point.'] },
+    { at: [3.5, 1.9, 16.22], ry: 0,          lines: ['cocoa is free.', 'the jar takes tips.', 'bo says hi.'] },
+    { at: [-3.1, 0.95, 11.75], ry: Math.PI,  lines: ['tickets. scares included.', 'courage not sold separately.'] }
+  ];
+
+  /* ---------------- the yard: what you see coming up route 9 (view-only) ---------------- */
+  D.YARD = {
+    marqueeAt: [-1.2, 3.1, 7], marqueeWord: 'SCREAM BARN', litLetters: [0, 1, 5], buzzLetter: 2,
+    lightSpans: [                       // string lights: [x0,y0,z0, x1,y1,z1, bulbs]
+      [-1.2, 2.9, 7, -4.4, 2.1, 11.9, 8],
+      [-4.4, 2.1, 12.6, -2.5, 1.6, 14.6, 6],
+      [-2.5, 1.6, 14.6, -2.5, 1.6, 5, 14]
+    ],
+    fence: { x: -8.5, z0: 1, z1: 27, gapAt: 21, gapW: 3, posts: 12 },
+    shedWindow: [-4.4, 1.35, 11.79]
+  };
 
   /* ---------------- M6: co-op crew mode (bible §10) ---------------- */
   D.NET = { snapHz: 15, posHz: 10, maxSeats: 4 };
