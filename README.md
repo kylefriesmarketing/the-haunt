@@ -173,3 +173,32 @@ it's the host's barn, their note, their drawer.
    attribution key off it. If it's wrong, one monster gags another and the sting credits a ghost.
 
 *The barn's been dark since '99. Doors in five. Breathe. — DBD*
+
+## Trap 14 — the barn has no shadow maps, and that is a decision (v0.12.0)
+
+r128 `MeshLambertMaterial` multiplies **all** direct light by ONE global `getShadowMask()`.
+Every floor, wall and prop here is Lambert, so a single shadow-casting light would not *rake*
+a light pool — it would **delete** every practical at once wherever a caster stood, punching a
+black hole through the room. The designed "conspirator" spot and the build-day sun were both
+cut for exactly this reason. Grounding comes from **blob contact discs** instead (one flat
+additive-free quad per body, scene-parented, `y = 0.02`).
+
+If you ever want real shadows: move the *receiving* surfaces to `MeshPhongMaterial({shininess:0})`
+first — Phong is per-light — and shot-test 17 per-fragment lights on an iGPU before you ship it.
+
+Two smaller r128 facts from the same audit, so nobody re-derives them:
+`SpotLightShadow.updateMatrices` overwrites `camera.far` from `light.distance` every frame (the
+"idle a light by collapsing its frustum" trick is a no-op — use `shadow.autoUpdate = false`), and
+a **black** texture under `AdditiveBlending` renders nothing at all, silently.
+
+## Trap 15 — `updateLighting()` is the ONLY writer of light intensity, colour and fog
+
+`V.setDaylight` sets a flag and swaps the sky; it no longer touches a single light. The old
+alarm `_keep` store/restore, the global flicker sinusoid and the direct-write ghost pulse were
+three writers fighting over `pl.intensity` — that is how the `_keep` hack was born. Add a
+fourth and they will fight again.
+
+⚠️ **The alarm is held by `night.alarm.until`, not by `active`.** `sim.tick` clears `active` on
+the next tick, so a test that writes `alarm.active = true` every frame makes the mode ping-pong
+night↔alarm and never settles — it looks exactly like a broken strike envelope. Set
+`alarm.until = night.t + 60` to hold it.

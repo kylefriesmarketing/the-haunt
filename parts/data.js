@@ -8,7 +8,7 @@
   D.TITLE = 'THE HAUNT';
   D.SUBTITLE = 'the scream barn · route 9 · hazel park';
   D.SAVE_KEY = 'haunt-save';
-  D.VERSION = '0.11.0';
+  D.VERSION = '0.12.0';
 
   /* ---------------- the barn (meters, y-up; x east, z south) ----------------
      Guests snake: row A east, cross the east passage, row B west, out.
@@ -327,6 +327,47 @@
   /* ---------------- game feel (view/UI only — the sim never reads this) ---------------- */
   D.FEEL = { veilMs: 420, doorsHoldMs: 1400, crossMax: 1.9 };
   D.STING = { countMs: 900, chimeDelayMs: 500 };
+  /* ---------------- LIGHT & AIR — view-only. the sim never reads this block. ----------------
+     ⚠️ NO SHADOW MAPS, ON PURPOSE. r128 MeshLambertMaterial multiplies ALL direct light by ONE
+     global getShadowMask(), so a single shadow caster would DELETE every practical pool at once
+     instead of raking it — a black hole punched through the room, not a rake. The grounding
+     comes from BLOB contact discs instead. Do not add castShadow here without moving the
+     receiving surfaces to Phong first, and shot-testing 17 per-fragment lights on an iGPU. */
+  D.LIGHTING = {
+    HEMI: { night: { sky: 0x232f52, ground: 0x1c150e, i: 0.44 },
+            day:   { sky: 0xa8bcd8, ground: 0x8a7a5c, i: 1.05 },
+            alarm: { sky: 0xeef2f8, ground: 0x767c84, i: 1.15 } },
+    FOG:  { night: { c: 0x060410, d: 0.055 }, day: { c: 0x8ea2bc, d: 0.010 },
+            alarm: { c: 0x30343a, d: 0.012 } },
+    /* per-room gels. i = point intensity, dist confines the pool (a point light with no shadow
+       shines THROUGH walls — a short throw is the only wall we can afford).
+       flick = { a,fa: slow sine | b,fb: fast sine | tick: {chance,depth,lenS,gapS} } */
+    ROOM: {
+      entry:   { gel: 0xffd9a0, i: 1.90, dist: 9,   flick: { a: .04, fa: .40 } },
+      corn:    { gel: 0xff9d4a, i: 1.47, dist: 8.5, flick: { a: .10, fa: .27 } },                  // breathing
+      dinner:  { gel: 0xff9a3e, i: 1.33, dist: 8,   flick: { a: .07, fa: 1.1, b: .05, fb: 6.3 } }, // candle waver
+      surgery: { gel: 0x9fd4ff, i: 1.26, dist: 8.5, flick: { a: .02, fa: .9,
+                 tick: { chance: .45, depth: .55, lenS: .10, gapS: 3.0 } } },                      // fluorescent dropout
+      passage: { gel: 0xff5a4a, i: 0.98, dist: 5,   flick: { a: .18, fa: .50 } },                  // dying red sag
+      clown:   { gel: 0xff8fd0, i: 1.47, dist: 9,   flick: { a: .08, fa: .90 } },                  // wrong-cheerful bounce
+      cellar:  { gel: 0x7f9aff, i: 1.09, dist: 8,   flick: { a: .12, fa: .33 } },                  // furnace throb
+      last:    { gel: 0xffd98f, i: 1.82, dist: 10,  flick: { a: .03, fa: .5 } },                   // warm relief
+      lobby:   { gel: 0xffe9c0, i: 2.24, dist: 11,  flick: { a: .02, fa: .4 } }                    // rock steady. safe.
+    },
+    SPINE: { gel: 0xffd890, i: 1.45, dist: 10, decay: 1.3 },   // yours. warm. never scary.
+    DECAY: 2,
+    DAY:   { gel: 0xfff0d8, i: 0.5 },
+    ALARM: { roomI: 1.7, roomDist: 26, gel: 0xf4f8ff,
+             strike: [0, .35, .1, .8, .25, 1], strikeS: 0.9,   // a fluorescent tube stuttering awake
+             recoverS: 2.5 },                                  // "the dark comes back on slow" — literally
+    STROBE_SAFE: { ampCap: 0.05, slew: 1.2 },   // strobeOff: max flicker amp; max |dI/dt| per second
+    CONE: { topR: 0.14, botR: 2.1, segs: 14, innerOp: 0.055, outerOp: 0.028, y: 2.7, sink: 0.9 },
+    BLOB: { r: 0.42, op: 0.42, opAlarm: 0.15, opDay: 0.25 },
+    MOTES: { perRoom: 44, perSpine: 22, size: 0.045, op: 0.5, fall: 0.08, wobble: 0.05,
+             cullM: 22, depth: 2.6 },
+    GHOST: { lift: 0.5, coneLift: 0.6 }         // her pulse is warm, not scary. bible §11.
+  };
+
 
   /* view-only: hand-painted boards on the guest side, in the house voice.
      ⚠️ every 'at' sits on a REAL wall face (inner faces: z 2.18 / z 25.82 / x 45.82) and clear of

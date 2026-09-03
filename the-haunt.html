@@ -54,7 +54,7 @@
   D.TITLE = 'THE HAUNT';
   D.SUBTITLE = 'the scream barn · route 9 · hazel park';
   D.SAVE_KEY = 'haunt-save';
-  D.VERSION = '0.11.0';
+  D.VERSION = '0.12.0';
 
   /* ---------------- the barn (meters, y-up; x east, z south) ----------------
      Guests snake: row A east, cross the east passage, row B west, out.
@@ -373,6 +373,47 @@
   /* ---------------- game feel (view/UI only — the sim never reads this) ---------------- */
   D.FEEL = { veilMs: 420, doorsHoldMs: 1400, crossMax: 1.9 };
   D.STING = { countMs: 900, chimeDelayMs: 500 };
+  /* ---------------- LIGHT & AIR — view-only. the sim never reads this block. ----------------
+     ⚠️ NO SHADOW MAPS, ON PURPOSE. r128 MeshLambertMaterial multiplies ALL direct light by ONE
+     global getShadowMask(), so a single shadow caster would DELETE every practical pool at once
+     instead of raking it — a black hole punched through the room, not a rake. The grounding
+     comes from BLOB contact discs instead. Do not add castShadow here without moving the
+     receiving surfaces to Phong first, and shot-testing 17 per-fragment lights on an iGPU. */
+  D.LIGHTING = {
+    HEMI: { night: { sky: 0x232f52, ground: 0x1c150e, i: 0.44 },
+            day:   { sky: 0xa8bcd8, ground: 0x8a7a5c, i: 1.05 },
+            alarm: { sky: 0xeef2f8, ground: 0x767c84, i: 1.15 } },
+    FOG:  { night: { c: 0x060410, d: 0.055 }, day: { c: 0x8ea2bc, d: 0.010 },
+            alarm: { c: 0x30343a, d: 0.012 } },
+    /* per-room gels. i = point intensity, dist confines the pool (a point light with no shadow
+       shines THROUGH walls — a short throw is the only wall we can afford).
+       flick = { a,fa: slow sine | b,fb: fast sine | tick: {chance,depth,lenS,gapS} } */
+    ROOM: {
+      entry:   { gel: 0xffd9a0, i: 1.90, dist: 9,   flick: { a: .04, fa: .40 } },
+      corn:    { gel: 0xff9d4a, i: 1.47, dist: 8.5, flick: { a: .10, fa: .27 } },                  // breathing
+      dinner:  { gel: 0xff9a3e, i: 1.33, dist: 8,   flick: { a: .07, fa: 1.1, b: .05, fb: 6.3 } }, // candle waver
+      surgery: { gel: 0x9fd4ff, i: 1.26, dist: 8.5, flick: { a: .02, fa: .9,
+                 tick: { chance: .45, depth: .55, lenS: .10, gapS: 3.0 } } },                      // fluorescent dropout
+      passage: { gel: 0xff5a4a, i: 0.98, dist: 5,   flick: { a: .18, fa: .50 } },                  // dying red sag
+      clown:   { gel: 0xff8fd0, i: 1.47, dist: 9,   flick: { a: .08, fa: .90 } },                  // wrong-cheerful bounce
+      cellar:  { gel: 0x7f9aff, i: 1.09, dist: 8,   flick: { a: .12, fa: .33 } },                  // furnace throb
+      last:    { gel: 0xffd98f, i: 1.82, dist: 10,  flick: { a: .03, fa: .5 } },                   // warm relief
+      lobby:   { gel: 0xffe9c0, i: 2.24, dist: 11,  flick: { a: .02, fa: .4 } }                    // rock steady. safe.
+    },
+    SPINE: { gel: 0xffd890, i: 1.45, dist: 10, decay: 1.3 },   // yours. warm. never scary.
+    DECAY: 2,
+    DAY:   { gel: 0xfff0d8, i: 0.5 },
+    ALARM: { roomI: 1.7, roomDist: 26, gel: 0xf4f8ff,
+             strike: [0, .35, .1, .8, .25, 1], strikeS: 0.9,   // a fluorescent tube stuttering awake
+             recoverS: 2.5 },                                  // "the dark comes back on slow" — literally
+    STROBE_SAFE: { ampCap: 0.05, slew: 1.2 },   // strobeOff: max flicker amp; max |dI/dt| per second
+    CONE: { topR: 0.14, botR: 2.1, segs: 14, innerOp: 0.055, outerOp: 0.028, y: 2.7, sink: 0.9 },
+    BLOB: { r: 0.42, op: 0.42, opAlarm: 0.15, opDay: 0.25 },
+    MOTES: { perRoom: 44, perSpine: 22, size: 0.045, op: 0.5, fall: 0.08, wobble: 0.05,
+             cullM: 22, depth: 2.6 },
+    GHOST: { lift: 0.5, coneLift: 0.6 }         // her pulse is warm, not scary. bible §11.
+  };
+
 
   /* view-only: hand-painted boards on the guest side, in the house voice.
      ⚠️ every 'at' sits on a REAL wall face (inner faces: z 2.18 / z 25.82 / x 45.82) and clear of
@@ -1792,9 +1833,13 @@
   let scene, camera, renderer, clock;
   let wallsGroup, guestMeshes = {}, stationMeshes = {}, nodeRings = {}, roomLights = {}, flickerT = 0;
   let crewMeshes = {};                   // the other humans in the walls (co-op)
-  let alarmMode = false, strobeOff = false, reducedMotion = false;
+  let strobeOff = false, reducedMotion = false;
   let polaroidWallTex = null, polaroidWallCtx = null;
   let ghostPulse = null;
+  const spineLights = [], cones = [], motes = [];
+  let lmode = 'night', alarmT = -1, recoverT = -1, blobBaseOp = 0.42;
+  const flickNow = {};
+  const tmpCol = { c: null };
   const buildMarks = [];                 // build-day slot markers/labels
   const curtains = {};                   // peek curtains, by peek id — they part when you come through
   let hands = null, handAnim = null;     // the gloves. yours.
@@ -2051,8 +2096,9 @@
     renderer.setPixelRatio(Math.min(devicePixelRatio, 1.6));
     renderer.setSize(innerWidth, innerHeight);
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x070510);
-    scene.fog = new THREE.FogExp2(0x070510, 0.038);
+    const LFN = H.DATA.LIGHTING.FOG.night;
+    scene.background = new THREE.Color(LFN.c);
+    scene.fog = new THREE.FogExp2(LFN.c, LFN.d);
     camera = new THREE.PerspectiveCamera(74, innerWidth / innerHeight, 0.08, 220);
     clock = new THREE.Clock();
     ['calm', 'worry', 'scream', 'joy'].forEach(k => FACES[k] = faceTexture(k));
@@ -2069,21 +2115,88 @@
   V.setDaylight = function (on) {
     daylight = !!on;
     if (!scene) return;
-    scene.fog.density = daylight ? 0.010 : 0.052;
-    scene.background.setHex(daylight ? 0x8ea2bc : 0x070510);
+    /* ⚠️ this sets the MODE and the sky. fog, hemi and every pool belong to updateLighting()
+       — the single writer. Two writers of pl.intensity is how the old _keep hack was born. */
+    scene.background.setHex(daylight ? 0x8ea2bc : H.DATA.LIGHTING.FOG.night.c);
     if (nightSky) nightSky.visible = !daylight;
     if (dome) dome.material.map = daylight ? domeDay : domeNight;
     if (nightGlow) nightGlow.visible = !daylight;
-    if (hemi) { hemi.intensity = daylight ? 1.05 : 0.85; hemi.color.setHex(daylight ? 0xa8bcd8 : 0x2a3a66); hemi.groundColor.setHex(daylight ? 0x8a7a5c : 0x141008); }
     if (sun) sun.intensity = daylight ? 0.85 : 0;
-    for (const r of H.DATA.ROOMS) {
-      const pl = roomLights[r.id]; if (!pl) continue;
-      if (daylight) { pl.color.setHex(0xfff0d8); pl.intensity = 0.5; }
-      else { pl.color.setHex(r.light); pl.intensity = r.lightI * 1.5; }
-    }
   };
 
   function mat(color, opts) { return new THREE.MeshLambertMaterial(Object.assign({ color }, opts || {})); }
+
+  /* ---------- the air: cones, motes, contact blobs ----------
+     ⚠️ TWO radial sprites, not one. The blob is BLACK under NormalBlending (it darkens the
+     floor); a mote is WHITE under AdditiveBlending. A black texture added to the frame
+     contributes exactly zero — reuse the blob sprite for the motes and they render nothing,
+     silently, with no console error to catch it. */
+  function radialTex(r255, g255, b255) {
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const x = c.getContext('2d');
+    const grad = x.createRadialGradient(32, 32, 3, 32, 32, 30);
+    const rgb = r255 + ',' + g255 + ',' + b255;
+    grad.addColorStop(0, 'rgba(' + rgb + ',0.85)');
+    grad.addColorStop(1, 'rgba(' + rgb + ',0)');
+    x.fillStyle = grad; x.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(c);
+  }
+  let BLOB_TEX = null, MOTE_TEX = null, BLOB_GEO = null;
+  function blobMesh(scale) {
+    if (!BLOB_TEX) { BLOB_TEX = radialTex(0, 0, 0); BLOB_GEO = new THREE.PlaneGeometry(1, 1); }
+    const L = H.DATA.LIGHTING;
+    const b = new THREE.Mesh(BLOB_GEO, new THREE.MeshBasicMaterial({
+      map: BLOB_TEX, transparent: true, opacity: L.BLOB.op, depthWrite: false, fog: true }));
+    b.rotation.x = -Math.PI / 2; b.renderOrder = 3;
+    b.scale.setScalar(L.BLOB.r * 2 * (scale || 1));
+    b.position.y = 0.02;
+    /* ⚠️ scene-level, NOT a child of the body group: that group rotates on X up to 1.45 rad
+       for melt/crawl, which would stand the 'contact shadow' on its edge. */
+    scene.add(b);
+    return b;
+  }
+
+  /* a beam you can see. two nested additive shells, opacity keyed to the fog: no fog, no beam. */
+  function beamCone(gel, x, z, roomId) {
+    const C = H.DATA.LIGHTING.CONE, grp = new THREE.Group(), mats = [], base = [];
+    /* ⚠️ the cone runs PAST the floor by C.sink. Ending it exactly at y=0 leaves a hard
+       decagon rim lying on the boards; the opaque floor clips the overshoot for free and
+       the beam reads as landing instead of stopping. */
+    const hCone = C.y + C.sink;
+    for (const pair of [[1, C.outerOp], [0.62, C.innerOp]]) {
+      const geo = new THREE.CylinderGeometry(C.topR * pair[0], C.botR * pair[0], hCone, C.segs, 1, true);
+      const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: gel, transparent: true, opacity: pair[1], blending: THREE.AdditiveBlending,
+        depthWrite: false, side: THREE.DoubleSide, fog: false }));
+      m.position.y = -hCone / 2; m.renderOrder = 2; grp.add(m);
+      mats.push(m.material); base.push(pair[1]);
+    }
+    grp.position.set(x, C.y, z); scene.add(grp);
+    cones.push({ mats, base, room: roomId || null });
+  }
+
+  /* the dust that makes the beam a volume. one Points per bulb, distance-culled to 2-3 live. */
+  function moteCluster(cx, cz, gel, count) {
+    const M = H.DATA.LIGHTING.MOTES;
+    if (!MOTE_TEX) MOTE_TEX = radialTex(255, 255, 255);
+    const pos = new Float32Array(count * 3), base = new Float32Array(count * 3);
+    const rng = H.makeRng(Math.round(cx * 31 + cz * 7) + 1);
+    for (let i = 0; i < count; i++) {
+      const a = rng.f() * 6.283, rr = Math.sqrt(rng.f()) * 1.9;   // denser at the beam core
+      base[i * 3] = cx + Math.cos(a) * rr;
+      base[i * 3 + 1] = rng.f() * M.depth;
+      base[i * 3 + 2] = cz + Math.sin(a) * rr;
+    }
+    pos.set(base);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const pts = new THREE.Points(geo, new THREE.PointsMaterial({
+      color: gel, size: M.size, transparent: true, opacity: M.op,
+      blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
+      map: MOTE_TEX, fog: false }));
+    scene.add(pts);
+    motes.push({ pts, base, cx, cz });
+  }
 
   function buildWorld() {
     const D = H.DATA;
@@ -2136,7 +2249,8 @@
       scene.add(p);
     }
 
-    hemi = new THREE.HemisphereLight(0x2a3a66, 0x141008, 0.85);
+    const HN = H.DATA.LIGHTING.HEMI.night;
+    hemi = new THREE.HemisphereLight(HN.sky, HN.ground, HN.i);
     scene.add(hemi);
     sun = new THREE.DirectionalLight(0xfff0d0, 0);   // morning through the board gaps; dark at showtime
     sun.position.set(-24, 40, -10);
@@ -2159,6 +2273,18 @@
       r.rotation.x = -Math.PI / 2 + sgn * Math.atan2(RIDGE - EAVE, HALF);
       scene.add(r);
     }
+    /* ---------- and the underside of it ----------
+       ⚠️ the roof above is FrontSide with normals OUTWARD, so it is invisible from inside —
+       which means the barn had NO LID. Under the old hemi-0.85 wash nobody noticed; the
+       moment the room went dark you were standing in the surgery looking up at STARS.
+       Same two slopes, wound inward, dark: the light now has a ceiling to land on. */
+    const ceilMat = new THREE.MeshLambertMaterial({ color: 0x1d1409, side: THREE.BackSide });
+    for (const sgn of [-1, 1]) {
+      const r = new THREE.Mesh(new THREE.PlaneGeometry(46, slopeW), ceilMat);
+      r.position.set(24, (EAVE + RIDGE) / 2 - 0.03, 14 + sgn * (HALF / 2));
+      r.rotation.x = -Math.PI / 2 + sgn * Math.atan2(RIDGE - EAVE, HALF);
+      scene.add(r);
+    }
     // gable ends — wound OUTWARD, and reaching the real eaves at z 0 / 28
     for (const [gx, sgn] of [[2, -1], [46, 1]]) {
       const geo = new THREE.BufferGeometry();
@@ -2168,6 +2294,7 @@
       geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tri), 3));
       geo.computeVertexNormals();
       scene.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0x241a10 })));
+      scene.add(new THREE.Mesh(geo, ceilMat));   // the same triangle, seen from in here
     }
     // the hayloft window. on every night. nothing ever mentions it.
     const loft = new THREE.Mesh(new THREE.CircleGeometry(0.5, 12), new THREE.MeshBasicMaterial({ color: 0x8a6a3a, fog: false }));
@@ -2206,20 +2333,28 @@
       scene.add(b);
     }
 
-    // room lights + name of the game: pools of practical light
+    // room lights + name of the game: POOLS of practical light. the dark between them is the product.
+    const LG = D.LIGHTING;
     for (const r of D.ROOMS) {
-      const pl = new THREE.PointLight(r.light, r.lightI * 1.5, 19, 1.5);
-      pl.position.set((r.x0 + r.x1) / 2, 2.7, (r.z0 + r.z1) / 2);
+      const cfg = LG.ROOM[r.id] || LG.ROOM.entry;
+      const cx = (r.x0 + r.x1) / 2, cz = (r.z0 + r.z1) / 2;
+      const pl = new THREE.PointLight(cfg.gel, cfg.i, cfg.dist, LG.DECAY);
+      pl.position.set(cx, LG.CONE.y, cz);
       scene.add(pl); roomLights[r.id] = pl;
-      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 6), new THREE.MeshBasicMaterial({ color: r.light }));
+      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 6), new THREE.MeshBasicMaterial({ color: cfg.gel }));
       bulb.position.copy(pl.position); scene.add(bulb);
+      beamCone(cfg.gel, cx, cz, r.id);
+      moteCluster(cx, cz, cfg.gel, LG.MOTES.perRoom);
     }
     // backstage work lights: a string of caged bulbs down the spine. yours. warm. always on.
     roomLights.spine = null;
     for (let i = 0; i < 5; i++) {
       const wx = 8 + i * 8;
-      const wl = new THREE.PointLight(0xffd890, 1.05, 15, 1.15);
+      const wl = new THREE.PointLight(LG.SPINE.gel, LG.SPINE.i, LG.SPINE.dist, LG.SPINE.decay);
       wl.position.set(wx, 2.85, 14); scene.add(wl);
+      spineLights.push(wl);            // ⚠️ ALL FIVE. four of them used to be anonymous, so the alarm never reached them.
+      beamCone(LG.SPINE.gel, wx, 14, null);
+      moteCluster(wx, 14, LG.SPINE.gel, LG.MOTES.perSpine);
       if (i === 2) roomLights.spine = wl;
       const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 6), new THREE.MeshBasicMaterial({ color: 0xffe9b8 }));
       bulb.position.set(wx, 2.85, 14); scene.add(bulb);
@@ -2263,7 +2398,9 @@
 
     // node beat rings (floor)
     for (const n of D.NODES) {
-      const ring = new THREE.Mesh(new THREE.RingGeometry(0.8, 1.02, 28), new THREE.MeshBasicMaterial({ color: 0xffcf5a, transparent: true, opacity: 0, side: THREE.DoubleSide, depthTest: false }));
+      /* additive, not paint: in a dark room a flat opaque ring reads as a sticker on the
+         floor and outshines the practical it is sitting under. */
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.8, 1.02, 28), new THREE.MeshBasicMaterial({ color: 0xffcf5a, transparent: true, opacity: 0, side: THREE.DoubleSide, depthTest: false, blending: THREE.AdditiveBlending }));
       ring.rotation.x = -Math.PI / 2;
       ring.position.set(n.pos[0], 0.06, n.pos[1]);
       ring.renderOrder = 5;
@@ -2742,8 +2879,9 @@
     bar.scale.set(0.85 / s, 0.14 / s, 1); bar.position.y = R.barY; bar.renderOrder = 9; bar.visible = false;
     grp.add(bar);
     scene.add(grp);
+    const blob = blobMesh(s);
     return {
-      grp, chest, head, face, hairMesh, armL, armR, legL, legR, phone, bar, bctx, btex, s,
+      grp, chest, head, face, hairMesh, armL, armR, legL, legR, phone, bar, bctx, btex, s, blob,
       stoop: B.stoop || 0, slouch: B.slouch || 0,
       lx: null, lz: null, walkD: ((id || 1) % 7) * 0.21, spd: 0, blend: 0, _far: null,
       distAcc: 0, timeAcc: 0, fresh: true, _barKey: null
@@ -2812,6 +2950,11 @@
       const rigBob = applyRig(m, g, dt);
       m.grp.position.set(g.x, bob + rigBob + (g.y || 0), g.z);
       m.grp.rotation.y = g.ry; m.grp.rotation.x = g.tilt || 0;
+      /* the shadow stays on the floor and lightens as the body leaves it. it reads the SAME
+         lift the group got (bob + rigBob + y), so a hop and a faint both show. */
+      const lift = bob + rigBob + (g.y || 0);
+      m.blob.position.set(g.x, 0.02, g.z);
+      m.blob.material.opacity = blobBaseOp * Math.max(0.15, 1 - Math.min(1, lift * 2));
       m.face.material.map = FACES[g.face] || FACES.calm;
       // LOD: past RIG.lodM the limbs and the nerve bar stop drawing; torso+head+face carry the read
       const far = camera.position.distanceTo(m.grp.position) > H.DATA.RIG.lodM;
@@ -2845,6 +2988,7 @@
   function disposeGuest(m) {
     try { m.btex.dispose(); m.bar.material.dispose(); m.face.material.dispose(); } catch (e) { }
     scene.remove(m.grp);
+    if (m.blob) { scene.remove(m.blob); try { m.blob.material.dispose(); } catch (e) { } }
   }
 
   /* the live sim's view of the room */
@@ -2890,7 +3034,7 @@
     const tag = labelSprite(name, null, '#9fd8a8');
     tag.scale.set(1.5, 0.42, 1); tag.position.y = 2.0; grp.add(tag);
     scene.add(grp);
-    return { grp, tag };
+    return { grp, tag, blob: blobMesh(1.1) };
   }
 
   V.syncCrew = function (list) {
@@ -2901,11 +3045,13 @@
       if (!m) m = crewMeshes[c.id] = makeCrewMesh(c.name || 'a monster');
       m.grp.position.set(c.x, 0, c.z);
       m.grp.rotation.y = c.yaw || 0;
+      if (m.blob) { m.blob.position.set(c.x, 0.02, c.z); m.blob.material.opacity = blobBaseOp; }
     }
     for (const id of Object.keys(crewMeshes)) {
       if (!seen[id]) {
         const m = crewMeshes[id];
         if (m.tag && m.tag.material.map) m.tag.material.map.dispose();
+        if (m.blob) { scene.remove(m.blob); try { m.blob.material.dispose(); } catch (e) { } }
         scene.remove(m.grp); delete crewMeshes[id];
       }
     }
@@ -3065,6 +3211,135 @@
     if (f >= 1) handAnim = null;
   }
 
+  /* ---------- LIGHT & AIR: the ONE writer of intensity, colour and fog ----------
+     Everything below is view-only; the sim never reads a single number of it, and a co-op
+     guest derives the identical barn from alarm state already on the wire. */
+
+  /* deterministic, because view.js has no Math.random in it and a flicker that differs
+     between the night and its own tape is a bug you cannot photograph twice. */
+  function hash01(v) {
+    let x = v | 0;
+    x = (x ^ 61) ^ (x >>> 16); x = x + (x << 3) | 0; x = x ^ (x >>> 4);
+    x = Math.imul(x, 0x27d4eb2d); x = x ^ (x >>> 15);
+    return ((x >>> 0) % 100000) / 100000;
+  }
+
+  function flickFactor(f, seed) {
+    const L = H.DATA.LIGHTING;
+    if (!f) return 1;
+    const ph = flickerT + seed * 0.7;                     // no two rooms breathe together
+    let amp = (f.a || 0) * Math.sin(ph * (f.fa || 1) * 6.283) +
+              (f.b || 0) * Math.sin(ph * (f.fb || 1) * 6.283);
+    if (strobeOff) return 1 + Math.max(-L.STROBE_SAFE.ampCap, Math.min(L.STROBE_SAFE.ampCap, amp));
+    const tk = f.tick;
+    if (tk) {
+      const b = Math.floor(flickerT / tk.gapS);           // one possible dropout per bucket
+      if (hash01(seed * 131 + b * 7919) < tk.chance) {
+        const st = (b + hash01(seed * 977 + b * 31) * 0.8) * tk.gapS;
+        if (flickerT >= st && flickerT < st + tk.lenS) amp -= tk.depth;
+      }
+    }
+    return 1 + amp;
+  }
+
+  /* a tube stuttering awake. strobeOff gets a plain ramp instead — the law, not a nicety. */
+  function strikeEnv(t) {
+    const A = H.DATA.LIGHTING.ALARM;
+    if (strobeOff) return Math.min(1, Math.max(0, t) / 0.6);
+    if (t >= A.strikeS) return 1;
+    const i = Math.min(A.strike.length - 1, Math.max(0, Math.floor(t / A.strikeS * A.strike.length)));
+    return A.strike[i];
+  }
+
+  function setI(pl, target, dt, slow) {
+    const L = H.DATA.LIGHTING, dI = target - pl.intensity;
+    if (strobeOff) { const c = L.STROBE_SAFE.slew * dt; pl.intensity += Math.max(-c, Math.min(c, dI)); return; }
+    /* flicker is written STRAIGHT: a lerp here would smother the 0.1s fluorescent dropout.
+       only the alarm recovery crawls — that is the whole point of the recovery. */
+    pl.intensity += slow ? dI * Math.min(1, dt / L.ALARM.recoverS * 2.2) : dI;
+  }
+
+  function updateMotes() {
+    const L = H.DATA.LIGHTING, M = L.MOTES, cull = M.cullM * M.cullM, y0 = L.CONE.y - M.depth;
+    for (const p of motes) {
+      const dx = camera.position.x - p.cx, dz = camera.position.z - p.cz;
+      const vis = lmode !== 'alarm' && (dx * dx + dz * dz) < cull;   // ⚠️ explicit cx/cz: userData has no .x/.y/.z
+      p.pts.visible = vis;
+      if (!vis || reducedMotion) continue;                            // reduced motion: still dust, just still
+      const a = p.pts.geometry.attributes.position, b = p.base;
+      for (let i = 0; i < a.count; i++) {
+        const y = ((b[i * 3 + 1] - flickerT * M.fall + i * 0.37) % M.depth + M.depth) % M.depth;
+        a.array[i * 3 + 1] = y + y0;
+        a.array[i * 3] = b[i * 3] + Math.sin(flickerT * 0.6 + i) * M.wobble;
+      }
+      a.needsUpdate = true;
+    }
+  }
+
+  function updateLighting(dt, N) {
+    if (!scene || !hemi) return;
+    const D = H.DATA, L = D.LIGHTING;
+    if (!tmpCol.c) tmpCol.c = new THREE.Color();
+    const c = tmpCol.c;
+    const alarmNow = !!(N && N.alarm && N.alarm.active);
+    /* the tape plays the night back AS NIGHT, whatever the barn is doing now — otherwise a
+       night whose alarm trips in its last 20s replays flat white with no beams. */
+    const want = camOverride ? 'night' : daylight ? 'day' : alarmNow ? 'alarm' : 'night';
+    if (want !== lmode) {
+      if (want === 'alarm') alarmT = 0;
+      if (lmode === 'alarm' && want === 'night') recoverT = 0;
+      lmode = want;
+    }
+    if (alarmT >= 0) alarmT += dt;
+    if (recoverT >= 0) { recoverT += dt; if (recoverT > L.ALARM.recoverS) recoverT = -1; }
+    const slow = recoverT >= 0;
+    const k = slow ? Math.min(1, dt / L.ALARM.recoverS * 1.8) : Math.min(1, dt * 6);
+
+    const F = L.FOG[lmode], HM = L.HEMI[lmode];
+    scene.fog.color.lerp(c.setHex(F.c), k);
+    scene.fog.density += (F.d - scene.fog.density) * k;
+    hemi.color.lerp(c.setHex(HM.sky), k);
+    hemi.groundColor.lerp(c.setHex(HM.ground), k);
+    hemi.intensity += (HM.i - hemi.intensity) * k;
+
+    if (ghostPulse) { ghostPulse.t -= dt; if (ghostPulse.t <= 0) ghostPulse = null; }
+
+    for (const r of D.ROOMS) {
+      const pl = roomLights[r.id]; if (!pl) continue;
+      const cfg = L.ROOM[r.id] || L.ROOM.entry;
+      let target, gel, fl = 1;
+      if (lmode === 'alarm') { gel = L.ALARM.gel; pl.distance = L.ALARM.roomDist; target = L.ALARM.roomI * strikeEnv(alarmT); }
+      else if (lmode === 'day') { gel = L.DAY.gel; pl.distance = cfg.dist; target = L.DAY.i; }
+      else {
+        gel = cfg.gel; pl.distance = cfg.dist;
+        fl = flickFactor(cfg.flick, r.x0);
+        target = cfg.i * fl;
+        if (ghostPulse && ghostPulse.room === r.id)          // her: warm, additive, never a strobe
+          target += Math.max(0, Math.sin(ghostPulse.t * 2.4)) * L.GHOST.lift;
+      }
+      flickNow[r.id] = fl;
+      pl.color.lerp(c.setHex(gel), Math.min(1, dt * 5));
+      setI(pl, target, dt, slow);
+    }
+    for (const wl of spineLights) {
+      const al = lmode === 'alarm';
+      wl.distance = al ? L.ALARM.roomDist : L.SPINE.dist;
+      wl.color.lerp(c.setHex(al ? L.ALARM.gel : L.SPINE.gel), Math.min(1, dt * 5));
+      setI(wl, al ? L.ALARM.roomI * strikeEnv(alarmT) : lmode === 'day' ? L.DAY.i : L.SPINE.i, dt, slow);
+    }
+
+    /* the beams live in the fog. the alarm kills the fog, so the alarm kills the beams —
+       fluorescent light has no volume, and that is exactly WHY it is the horror state. */
+    const fogRatio = Math.max(0, Math.min(1, scene.fog.density / L.FOG.night.d));
+    for (const cn of cones) {
+      let f = cn.room ? (flickNow[cn.room] === undefined ? 1 : flickNow[cn.room]) : 1;
+      if (ghostPulse && cn.room === ghostPulse.room) f *= 1 + L.GHOST.coneLift;
+      for (let i = 0; i < cn.mats.length; i++) cn.mats[i].opacity = cn.base[i] * fogRatio * f;
+    }
+    blobBaseOp = lmode === 'alarm' ? L.BLOB.opAlarm : lmode === 'day' ? L.BLOB.opDay : L.BLOB.op;
+    updateMotes();
+  }
+
   /* ---------- per-frame ---------- */
   V.update = function (night, player, buildSlots, dtIn, deltas) {
     const dt = dtIn === undefined ? clock.getDelta() : (clock.getDelta(), dtIn);   // keep the clock in step either way
@@ -3094,29 +3369,7 @@
         else sm.led.material.color.setHex(night.t < st.readyAt ? 0xe8a23a : 0x39ff70);
       }
     }
-    // light mood
-    const alarmNow = night && night.alarm.active;
-    if (alarmNow !== alarmMode) {
-      alarmMode = alarmNow;
-      for (const [id, pl] of Object.entries(roomLights)) {
-        if (alarmMode) { pl._keep = pl.intensity; pl.intensity = 1.6; pl.color.setHex(0xf8f4e8); }
-        else { pl.intensity = pl._keep || pl.intensity; const r = D.ROOMS.find(rr => rr.id === id); if (r) pl.color.setHex(r.light); }
-      }
-      scene.fog.density = alarmMode ? 0.012 : 0.052;
-    }
-    if (!alarmMode && !strobeOff && !daylight) {
-      // gentle practical flicker
-      for (const r of D.ROOMS) {
-        const pl = roomLights[r.id];
-        pl.intensity = r.lightI * 1.5 * (0.92 + 0.13 * Math.sin(flickerT * (3 + r.x0 * 0.13) + r.z0));
-      }
-    }
-    if (ghostPulse) {
-      ghostPulse.t -= dt;
-      const pl = roomLights[ghostPulse.room];
-      if (pl) pl.intensity = (ghostPulse.base || 0.3) + Math.max(0, Math.sin(ghostPulse.t * 2.4)) * 0.5;
-      if (ghostPulse.t <= 0) { if (pl) pl.intensity = ghostPulse.base; ghostPulse = null; }
-    }
+    updateLighting(dt, night);
     if (V._chair && !reducedMotion) V._chair.rotation.x = Math.sin(flickerT * 0.9) * 0.02; // it rocks. barely. no comment.
     updateSway(dt);
     updateHands(dt);
@@ -3137,7 +3390,7 @@
     if (ev.type === 'ghost') {
       const D = H.DATA;
       const node = D.NODES.find(n => n.id === ev.node);
-      if (node) ghostPulse = { room: node.room, t: 3.5, base: (D.ROOMS.find(r => r.id === node.room) || {}).lightI || 0.3 };
+      if (node) ghostPulse = { room: node.room, t: 3.5 };   // additive. updateLighting ticks and expires it.
     }
   };
 
