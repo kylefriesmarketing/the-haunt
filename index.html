@@ -54,7 +54,7 @@
   D.TITLE = 'THE HAUNT';
   D.SUBTITLE = 'the scream barn · route 9 · hazel park';
   D.SAVE_KEY = 'haunt-save';
-  D.VERSION = '0.12.0';
+  D.VERSION = '0.13.0';
 
   /* ---------------- the barn (meters, y-up; x east, z south) ----------------
      Guests snake: row A east, cross the east passage, row B west, out.
@@ -155,7 +155,6 @@
     flashCam:    { name: 'scare-cam',    power: 6,  cost: [300, 200, 380], resetS: 10, desc: 'the flash catches the whole group mid-scream. lobby wall material.' }
   };
   D.TIER_MULT = [1, 1.35, 1.8];        // power multiplier by tier
-  D.BODY_SCARE = { power: 30, cooldown: 9, energyCost: 9 };  // your pop-out from a peek door
 
   /* ---------------- scare school (bible §6.2) ----------------
      Six techniques the trade actually names, learned across the season. Each is a DIFFERENT
@@ -166,7 +165,7 @@
      `unlock` is the night index it's taught on. */
   D.TECHNIQUES = [
     {
-      key: 'pop', name: 'the pop', icon: '!', unlock: 0, kind: 'instant',
+      key: 'pop', name: 'the pop', icon: '!', unlock: 0, kind: 'instant', coach: 'bo',
       power: 30, cooldown: 9,
       desc: 'through the curtain, on the beat. never say boo.',
       how: 'stand at a peek door and fire in the window.'
@@ -174,30 +173,35 @@
     {
       key: 'stalk', name: 'the stalk', icon: '⟶', unlock: 2, kind: 'charge',
       power: 15, cooldown: 12, chargeRate: 0.55, chargeMax: 3.0, decay: 1.1, behindM: 7.5,
+      coach: 'dee', paceTol: 0.65,   // m/s window around GUEST.speed that counts as matching their pace
       desc: 'match their pace, stay behind them, let it get unbearable.',
       how: 'follow a group from BEHIND. the longer they feel watched, the harder it lands.'
     },
     {
       key: 'creep', name: 'the creep', icon: '◡', unlock: 4, kind: 'charge',
       power: 17, cooldown: 12, chargeRate: 0.7, chargeMax: 2.6, decay: 2.4, speedMax: 1.3, nearM: 9,
+      coach: 'grace',
       desc: 'inhuman-slow, into the light, wrong at every joint.',
       how: 'move SLOWLY near them. any hurry and the spell breaks.'
     },
     {
       key: 'scarecrow', name: 'the scarecrow', icon: '†', unlock: 6, kind: 'charge',
       power: 20, cooldown: 16, chargeRate: 0.5, chargeMax: 3.6, decay: 4.0, nearM: 9, mustBeInRoom: true,
+      coach: 'priya',
       desc: 'be a prop. be furniture. wait. (the trade calls it the scarecrow routine.)',
       how: 'stand DEAD STILL in the room with them — not backstage — and do not twitch.'
     },
     {
       key: 'chainsaw', name: 'the chainsaw run', icon: '⚙', unlock: 8, kind: 'hold',
       power: 9, cooldown: 20, drainPerS: 8, maxHoldS: 4.5, nearM: 7, pushPerS: 0.9, lowPitch: -0.04,
+      coach: 'marcus',
       desc: 'rev LOW, by the legs. held high it fails and everyone knows it.',
       how: 'hold E near them and AIM DOWN. it herds them forward — that is the point.'
     },
     {
       key: 'slider', name: 'the slider', icon: '↘', unlock: 11, kind: 'instant',
       power: 34, cooldown: 22, needSprint: true, wide: true, nearM: 8,
+      coach: 'tater', sprintNeedS: 0.5, sprintPerfectS: 1.2, sprintGraceS: 0.35,
       desc: 'knee-plates. in at their feet. knott\'s invented it and never apologised.',
       how: 'SPRINT, then fire — it takes the whole group at once. the showpiece.'
     }
@@ -250,6 +254,32 @@
     { id: 'late',    within: 99,   mult: 0.3,  label: 'late.' }
   ];
   D.MISS_PRIME_LOSS = 8;
+  /* ---------------- the trade: technique tuning (bible §6.2) ---------------- */
+  /* ⚠️ THE CREEP SPEED IS LOAD-BEARING, NOT FLAVOUR. The stalk must match guest pace
+     (1.15 m/s ± paceTol) and the creep must stay under speedMax 1.3 — a player who can only
+     walk 3.6 or sprint 5.6 can never satisfy either gate, and both techniques would ship as
+     pure decoration. Hold Ctrl to creep. */
+  D.PLAYER = { walk: 3.6, sprint: 5.6, creep: 1.05 };
+
+  D.TECH = {
+    fireMinFrac: 0.25,   // below this charge, E prefers a station under your hand (§5 priority ladder)
+    sprintMin: 4.6,      // m/s — you count as sprinting above this (walk 3.6, sprint 5.6)
+    posSpeedMax: 7,      // hard ceiling on how fast ANY actor may be seen to move (the host trusts nothing)
+    tailTolM: 0.8,       // how far past a group's rearmost you may stand and still be "behind" them
+    revSpike: true,      // the chainsaw lands its `power` once at holdStart — the rev jump
+    holdMagDiv: 6        // a hold's magnitude is an INTEGRAL over seconds; divide before it competes
+                         // with instantaneous pops for bestScare, or one saw run wins every night
+  };
+  /* charge → grade. Bands mirror D.GRADES multipliers so the melt (>=1.35), bounty (>=1.4)
+     and polaroid (>=1.1) gates keep working with no special-casing. */
+  D.TECH_BANDS = [
+    { at: 0.90, id: 'perfect', mult: 1.5,  label: 'UNBEARABLE' },
+    { at: 0.55, id: 'good',    mult: 1.15, label: 'they felt it' },
+    { at: 0.25, id: 'early',   mult: 0.55, label: 'half-baked…' },
+    { at: 0.00, id: 'late',    mult: 0.3,  label: 'nothing there.' }
+  ];
+  D.CHAINSAW_HIGH_PRIME_LOSS = 6;   // held high: the group relaxes and someone points
+
 
   /* ---------------- guests ---------------- */
   D.GUEST = {
@@ -447,6 +477,20 @@
 
   /* ---------------- voice — lowercase, deadpan, warm ---------------- */
   D.VOICE = {
+    school: {
+      stalk: ['dee teaches tonight: match their pace. stay behind. let it get unbearable.',
+        '“they can feel a person behind them. that’s the whole trick.” — dee, entirely'],
+      creep: ['grace teaches tonight: slow is scary. hurry is a guy in a costume.'],
+      scarecrow: ['priya teaches tonight: people ignore furniture. be furniture. then don’t be.'],
+      chainsaw: ['marcus teaches tonight: rev LOW. by the legs. held high it’s a leaf blower.'],
+      slider: ['tater teaches tonight, insufferably: knee-plates. runway. in at their feet.']
+    },
+    tech: {
+      charged: ['it’s unbearable back there. spring it.', 'they keep looking over their shoulders. now.'],
+      sawHigh: ['rev LOW. knees. we talked about this.', 'held high. a dad just said “weed whacker.”'],
+      noRunway: ['you need a runway for that.', 'sliders sprint. that was a stroll.'],
+      locked: ['scare school hasn’t covered that one yet.']
+    },
     walkboys: ['copy.', 'on it.', 'resetting.', 'in position.', 'they’re coming to you.'],
     huh: ['“huh.” — somebody’s dad', '“neat.” — the dad, devastating', '“is that it?” — a teen, lying',
       '“i seen worse at the mall.” — a man who has not', '“that’s good craftsmanship.” — the dad, appraising the panel'],
@@ -599,6 +643,40 @@
     [523.25, 659.25, 783.99, 1046.5].forEach(function (f, i) { tone('triangle', f, t + i * 0.11, 0.5, 0.055); });
   };
   A.chalkTick = function () { if (!ensure()) return; noise(now(), 0.03, 0.05, 4200); };
+  /* ---------- the trade, by ear ----------
+     ⚠️ NOT garnish. A charge technique whose only state is a 150px DOM bar is the first verb in
+     this game a player cannot run with their eyes off the HUD, and the README's own boast is
+     that the whole thing is playable by ear. The band blips and the saw idle are required. */
+  A.saw = function (on, low) {
+    if (!ensure()) return;
+    if (!on) {
+      if (A.sawNode) { try { A.sawNode.g.gain.setTargetAtTime(0, now(), 0.05); A.sawNode.o.stop(now() + 0.3); A.sawNode.l.stop(now() + 0.3); } catch (e) { } A.sawNode = null; }
+      return;
+    }
+    if (A.sawNode) { A.sawNode.g.gain.setTargetAtTime(low ? 0.13 : 0.045, now(), 0.06); return; }
+    const o = A.ctx.createOscillator(), g = A.ctx.createGain();
+    o.type = 'sawtooth'; o.frequency.value = 62;
+    const l = A.ctx.createOscillator(), lg = A.ctx.createGain();
+    l.frequency.value = 11; lg.gain.value = 9;            // the wobble that makes it a two-stroke
+    l.connect(lg); lg.connect(o.frequency);
+    g.gain.value = 0; g.gain.setTargetAtTime(low ? 0.13 : 0.045, now(), 0.05);
+    o.connect(g); g.connect(A.master); o.start(); l.start();
+    A.sawNode = { o, g, l };
+  };
+  /* one blip per band CROSSING, never per frame: this is how you feel a charge ripen without
+     looking down. Pitch rises with the band, so "unbearable" is audibly the top of the ladder. */
+  A.bandUp = function (bandIdx) {
+    if (!ensure()) return;
+    const f = [660, 520, 415, 330][Math.max(0, Math.min(3, bandIdx))];
+    tone('triangle', f, now(), 0.1, 0.07);
+  };
+  A.slide = function () {
+    if (!ensure()) return;
+    const t = now();
+    noise(t, 0.3, 0.16, 2600);
+    tone('sawtooth', 220, t, 0.28, 0.06, 70);
+  };
+
   A.cash = function () { if (!ensure()) return; const t = now(); tone('triangle', 880, t, 0.07, 0.08); tone('triangle', 1174, t + 0.07, 0.12, 0.08); };
   A.click = function () { if (!ensure()) return; tone('sine', 500, now(), 0.04, 0.05); };
   A.doorCreak = function () { if (!ensure()) return; tone('sawtooth', 130, now(), 0.7, 0.03, 210); };
@@ -801,8 +879,15 @@
          keyed by actor id; 'you' is the local/solo performer. */
       bodyReadyAt: {}, comedyReadyAt: {},
       ghostPlanned: null, lastSpawnT: -999,
-      bestScare: null
+      bestScare: null,
+      /* the performers. Actor kinematics are INPUTS, exactly like triggerStation — same seed
+         plus the same input script is the same night. NOTHING in the technique kernel consumes
+         rng: a charge is pure skill, so an actor who charges all night and never fires must
+         leave the tally byte-identical (test-sim T13 is the guard). */
+      actors: {}
     };
+    const techByKey = {}; data.TECHNIQUES.forEach(t => techByKey[t.key] = t);
+    N.techsAllowed = cfg.techs || data.TECHNIQUES.filter(t => t.unlock <= (cfg.nightIdx || 0)).map(t => t.key);
 
     // plan the '96 moment (iron rules: slow nights only, once, kind, unexplained)
     if (cfg.seasonFlags && cfg.seasonFlags.ghostArmed &&
@@ -847,29 +932,24 @@
     }
 
     /* ---- scare resolution ---- */
-    function applyScare(node, source, powerBase, gradeMult, opts) {
-      opts = opts || {};
-      const group = groupInWindow(node);
-      if (!group) { N.emit('scareMiss', { node: node.id, source }); return null; }
-      const behind = opts.fromBehind !== false; // our nodes are authored to hit from cover
-      const distracted = N.t < group.distractedUntil;
-      const primeMult = 1 + group.prime / 180;
-      const congaMult = group.guests.length > 10 ? D().GUEST.congaResist : 1;
-      let magnitudeSum = 0, dropped = 0, melted = 0, gotem = 0, screams = 0, flinches = 0;
-      for (const gst of group.guests) {
-        if (gst.out || gst.state === 'distress' || gst.state === 'chicken') continue;
+    /* ONE place a scare becomes nerve loss. Stations, the pop, every technique and the
+       chainsaw's per-tick drain all pass through here — which is what makes the soft-scare,
+       immune, spent and angry clamps impossible to route around by adding a new verb.
+       `floor` is the minimum a DISCRETE hit lands (1). A continuous drain passes 0: at 30 Hz
+       a floor of 1 would deal 30/s to exactly the guests the clamps exist to protect. */
+    function hitGuest(gst, group, pwIn, gradeMult, c, nodeId, floor) {
+      {
         const arch = D().ARCHETYPES[gst.arch];
-        let pw = powerBase * gradeMult * primeMult * congaMult * (arch.resist);
-        pw *= (behind || distracted) ? D().GUEST.behindMult : D().GUEST.frontMult;
+        let pw = pwIn;
         pw *= Math.pow(0.72, gst.hits || 0);            // habituation: the same guest startles less each time
         if (gst.spent) pw = Math.min(pw, 4);            // they already dropped tonight. they're riding the high.
         if (gst.angry) pw = 1;                          // complained. arms crossed. done.
         if (N.softScare || arch.soft) pw = Math.min(pw, gst.nerve - gst.pool * 0.35); // soft mode: never below comfy
         if (arch.immune) pw = Math.min(pw, 2);
-        if (pw <= 0) pw = 1;
+        if (pw <= 0) { if (floor === 0) return; pw = 1; }
         const before = gst.nerve / gst.pool;
         gst.nerve = Math.max(gst.nerve - pw, -0.4 * gst.pool);
-        magnitudeSum += pw;
+        c.magnitudeSum += pw;
         const after = gst.nerve / gst.pool;
         gst.lowest = Math.min(gst.lowest, after);
         const R = D().REACT;
@@ -885,39 +965,72 @@
           gst.delightPend += pw * D().GUEST.delightConvert * arch.delightM;
           if (kind) gst.hits = (gst.hits || 0) + 1;
           if (kind === 'dropped') {
-            dropped++; N.tally.dropped++; gst.spent = true;
+            c.dropped++; N.tally.dropped++; gst.spent = true;
             group.prime = Math.min(100, group.prime + D().GUEST.primeOnDrop);
-            if (gradeMult >= 1.35 && gst.nerve < gst.pool * R.dropped - 24 && !arch.soft) { gst.reactKind = 'melt'; gst.reactT = D().POSE.durs.melt; melted++; N.tally.melted++; }
-          } else if (kind === 'gotem') { gotem++; N.tally.gotem++; group.prime = Math.min(100, group.prime + D().GUEST.primeOnScream); }
-          else if (kind === 'scream') { screams++; N.tally.scream++; group.prime = Math.min(100, group.prime + D().GUEST.primeOnScream); }
-          else { flinches++; N.tally.flinch++; }
+            if (gradeMult >= 1.35 && gst.nerve < gst.pool * R.dropped - 24 && !arch.soft) { gst.reactKind = 'melt'; gst.reactT = D().POSE.durs.melt; c.melted++; N.tally.melted++; }
+          } else if (kind === 'gotem') { c.gotem++; N.tally.gotem++; group.prime = Math.min(100, group.prime + D().GUEST.primeOnScream); }
+          else if (kind === 'scream') { c.screams++; N.tally.scream++; group.prime = Math.min(100, group.prime + D().GUEST.primeOnScream); }
+          else { c.flinches++; N.tally.flinch++; }
           if (arch.loudBreak && (kind === 'scream' || kind === 'gotem' || kind === 'dropped')) N.emit('loudBreak', { guest: gst.id });
           if (arch.huh && kind === 'flinch') N.emit('huh', { guest: gst.id });
         }
         // distress check: a too-hard single hit on someone already deep. rare by design. never soft, never grandma, never twice.
         if (!N.softScare && !arch.immune && !gst.spent && !gst.angry && pw >= 40 && gst.nerve < D().GUEST.distressAt * gst.pool) {
           gst.state = 'distress'; gst.distressT = D().GUEST.distressGraceS;
-          N.emit('distress', { guest: gst.id, node: node.id });
+          N.emit('distress', { guest: gst.id, node: nodeId });
         }
       }
+    }
+
+    /* the group-direct resolution. `applyScare` (node + beat window) is now a thin wrapper on it,
+       so a technique fired mid-room and a station fired on the beat resolve through one body. */
+    function applyScareToGroup(group, source, powerBase, gradeMult, opts) {
+      opts = opts || {};
+      const behind = opts.fromBehind !== false; // our nodes are authored to hit from cover
+      const distracted = N.t < group.distractedUntil;
+      const primeMult = 1 + group.prime / 180;
+      const congaMult = group.guests.length > 10 ? D().GUEST.congaResist : 1;
+      const nodeId = opts.node ? opts.node.id : nearestNodeId(group);
+      const c = { magnitudeSum: 0, dropped: 0, melted: 0, gotem: 0, screams: 0, flinches: 0 };
+      for (const gst of group.guests) {
+        if (gst.out || gst.state === 'distress' || gst.state === 'chicken') continue;
+        const arch = D().ARCHETYPES[gst.arch];
+        let pw = powerBase * gradeMult * primeMult * congaMult * (arch.resist);
+        pw *= (behind || distracted) ? D().GUEST.behindMult : D().GUEST.frontMult;
+        hitGuest(gst, group, pw, gradeMult, c, nodeId, 1);
+      }
       // contagion: everyone in a chain group tightens
-      group.prime = Math.min(100, group.prime + D().GUEST.primeContagion * (screams + dropped > 0 ? 1 : 0));
-      const result = { node: node.id, source, dropped, melted, gotem, screams, flinches, magnitude: magnitudeSum, group: group.id, gradeMult };
+      group.prime = Math.min(100, group.prime + D().GUEST.primeContagion * (c.screams + c.dropped > 0 ? 1 : 0));
+      const result = { node: nodeId, source, dropped: c.dropped, melted: c.melted, gotem: c.gotem, screams: c.screams, flinches: c.flinches, magnitude: c.magnitudeSum, group: group.id, gradeMult };
+      if (opts.tech) result.tech = opts.tech;
       N.emit('scare', result);
-      if (!N.bestScare || magnitudeSum > N.bestScare.magnitude) N.bestScare = { ...result, t: N.t };
-      // flash cam capture
-      const flash = Object.values(N.stations).find(st => st.type === 'flashCam' && st.node.id === node.id && !st.broken);
-      if (flash && dropped > 0 && gradeMult >= 1.1) {
+      if (!N.bestScare || result.magnitude > N.bestScare.magnitude) N.bestScare = { ...result, t: N.t };
+      /* flash cam capture. A node fire keeps the EXACT old same-node test; a group-direct fire
+         asks the physically-true question instead: is this group in that camera's own window? */
+      const flash = Object.values(N.stations).find(st => st.type === 'flashCam' && !st.broken &&
+        (opts.node ? st.node.id === opts.node.id : groupInWindow(st.node) === group));
+      if (flash && c.dropped > 0 && gradeMult >= 1.1) {
         N.tally.polaroids++;
-        N.drawer += D().SEASON.photoSale * dropped;
-        N.emit('polaroid', { node: node.id, dropped, group: group.id, size: group.guests.length });
-        if (group.guests.length >= 6 && dropped >= 1) N.emit('polaroidFull', { group: group.id });
+        N.drawer += D().SEASON.photoSale * c.dropped;
+        N.emit('polaroid', { node: nodeId, dropped: c.dropped, group: group.id, size: group.guests.length });
+        if (group.guests.length >= 6 && c.dropped >= 1) N.emit('polaroidFull', { group: group.id });
       }
       // the bounty: melt a flannel guy at PERFECT
-      if (melted > 0 && gradeMult >= 1.4 && !N.tally.bounty && group.guests.some(x => x.arch === 'flannel' && x.reactKind === 'melt')) {
+      if (c.melted > 0 && gradeMult >= 1.4 && !N.tally.bounty && group.guests.some(x => x.arch === 'flannel' && x.reactKind === 'melt')) {
         N.tally.bounty = true; N.drawer -= D().BOUNTY; N.emit('bounty', {});
       }
       return result;
+    }
+    function applyScare(node, source, powerBase, gradeMult, opts) {
+      const group = groupInWindow(node);
+      if (!group) { N.emit('scareMiss', { node: node.id, source }); return null; }
+      return applyScareToGroup(group, source, powerBase, gradeMult, Object.assign({}, opts || {}, { node }));
+    }
+    function nearestNodeId(group) {
+      const l = leaderS(group); let best = nodes[0];
+      if (l === null) return best.id;
+      for (const nd of nodes) if (Math.abs(l - nd.s) < Math.abs(l - best.s)) best = nd;
+      return best.id;
     }
 
     function groupInWindow(node, mult) {
@@ -975,19 +1088,229 @@
       for (const grp of N.groups) { if (grp.mergedInto) continue; const l = leaderS(grp); if (l === null) continue; const d = Math.abs(l - node.s); if (d < bd) { bd = d; best = grp; } }
       return best;
     }
+    /* cooldowns are per actor AND per technique: firing the stalk as s0 gates neither s1's
+       stalk nor s0's creep. The wire field name (`bd`) is unchanged — only the keys got richer. */
+    const ready = (who, key) => N.bodyReadyAt[who + ':' + key] || 0;
+    const setReady = (who, key, t) => { N.bodyReadyAt[who + ':' + key] = t; };
     N.triggerBody = function (peekId, who) {
       who = who || 'you';
-      if (N.t < (N.bodyReadyAt[who] || 0) || N.alarm.active) return { ok: false };
+      if (N.t < ready(who, 'pop') || N.alarm.active) return { ok: false };
       const peek = D().DOORS.peek.find(p => p.id === peekId);
       if (!peek) return { ok: false };
-      N.bodyReadyAt[who] = N.t + D().BODY_SCARE.cooldown;
+      setReady(who, 'pop', N.t + techByKey.pop.cooldown);
       const node = nodeById[peek.node];
       const grade = gradeFor(node);
       if (grade.mult === 0) { N.tally.walkby++; N.emit('walkby', { node: node.id, body: true, who }); return { ok: true, grade }; }
-      const res = applyScare(node, who === 'you' ? 'you-body' : 'body:' + who, D().BODY_SCARE.power, grade.mult, { fromBehind: true });
+      const res = applyScare(node, who === 'you' ? 'you-body' : 'body:' + who, techByKey.pop.power, grade.mult, { fromBehind: true });
       N.emit('grade', { label: grade.label, id: grade.id, body: true, who });
       return { ok: true, grade, res };
     };
+    /* ---------------- the trade: the six verbs (bible §6.2) ----------------
+       pop = the beat (triggerBody, unchanged) · stalk/creep/scarecrow = patience (charge)
+       chainsaw = steering (a held drain) · slider = movement (a real sprint runway). */
+
+    N.setActor = function (who, sIn) {
+      const a = N.actors[who] || (N.actors[who] = {
+        x: +sIn.x || 0, z: +sIn.z || 0, wx: +sIn.x || 0, wz: +sIn.z || 0,
+        speed: 0, inRoom: false, pitch: 0,
+        tech: N.techsAllowed[0] || 'pop', charge: 0, sprintT: 0, sprintStopT: -99,
+        hold: null, holdCounts: null, holdHighSaid: false
+      });
+      /* ⚠️ this records the WANTED position, never the accepted one. actorTick rate-limits it
+         to TECH.posSpeedMax on the SIM clock and derives speed from the accepted step. Two
+         reasons, both load-bearing: the host must not trust a position off the wire (a seat
+         could otherwise pose itself inside a group from anywhere), and host and guests have to
+         measure one speed on ONE clock — deriving it from render dt on one side and snapshot
+         arrival on the other makes the same run pass a gate for one seat and fail for another. */
+      a.wx = +sIn.x || 0; a.wz = +sIn.z || 0;
+      a.inRoom = !!sIn.inRoom; a.pitch = +sIn.pitch || 0;
+    };
+    N.setTechnique = function (who, key) {
+      const a = N.actors[who]; if (!a) return { ok: false };
+      if (!techByKey[key] || !N.techsAllowed.includes(key)) return { ok: false, locked: !!techByKey[key] };
+      if (a.tech === key) return { ok: true };
+      if (a.hold) endHold(who, a);          // switching away kills a live hold
+      a.tech = key; a.charge = 0;           // and throws the charge. selection is a commitment.
+      return { ok: true, key };
+    };
+    N.dropActor = function (who) {          // a co-op seat leaves: never leave a ghost saw running
+      const a = N.actors[who]; if (!a) return;
+      if (a.hold) endHold(who, a);
+      delete N.actors[who];
+    };
+
+    function targetGroup(a, rangeM) {       // nearest group, by its nearest live guest
+      let best = null;
+      for (const grp of N.groups) {
+        if (grp.mergedInto) continue;
+        let d = 1e9;
+        for (const gst of grp.guests) {
+          if (gst.out || gst.chicken) continue;
+          const p = N.guestPos(gst);
+          const dd = Math.hypot(p.x - a.x, p.z - a.z);
+          if (dd < d) d = dd;
+        }
+        if (d <= rangeM && (!best || d < best.d)) best = { grp, d };
+      }
+      return best;
+    }
+
+    function actorTick() {
+      const T = D(), B = T.BARN, cap = T.TECH.posSpeedMax * DT;
+      for (const who of Object.keys(N.actors)) {
+        const a = N.actors[who];
+        let tx = Math.max(B.x0, Math.min(B.x1, a.wx)), tz = Math.max(B.z0, Math.min(B.z1, a.wz));
+        const dx = tx - a.x, dz = tz - a.z, d = Math.hypot(dx, dz);
+        if (d > cap) { tx = a.x + dx / d * cap; tz = a.z + dz / d * cap; }
+        a.speed = Math.hypot(tx - a.x, tz - a.z) / DT;
+        a.x = tx; a.z = tz;
+        /* the runway. Derived from the accepted step, never from a 'sprinting' flag a client
+           could simply assert — the slider has to be EARNED by moving. */
+        if (a.speed >= T.TECH.sprintMin) a.sprintT += DT;
+        else { if (a.sprintT > 0) a.sprintStopT = N.t; a.sprintT = 0; }
+        /* ONE definition of "do I have a runway", derived here so the fire gate, the prompt and
+           a co-op guest reading it off the wire can never disagree about the same instant. */
+        const sl = techByKey.slider;
+        a.sprintReady = !!(sl && (a.sprintT >= sl.sprintNeedS || (a.sprintStopT >= 0 && N.t - a.sprintStopT <= sl.sprintGraceS)));
+        const tech = techByKey[a.tech];
+        if (tech && tech.kind === 'charge') {
+          let on = false;
+          if (!N.alarm.active) {                          // fluorescent light breaks every spell
+            const tgt = targetGroup(a, tech.behindM || tech.nearM);
+            if (tgt) {
+              if (a.tech === 'stalk') {
+                const actorS = route.sNear(a.x, a.z);
+                const tail = tailS(tgt.grp);
+                /* ⚠️ tailTolM must stay clear of sNear's 0.5 m sampling lattice, or this gate
+                   chatters on and off as you walk and chops the charge unpredictably. */
+                on = tail !== null && actorS <= tail + T.TECH.tailTolM
+                  && Math.abs(a.speed - T.GUEST.speed) <= tech.paceTol
+                  && a.speed > T.TECH_STILL;
+              } else if (a.tech === 'creep') {
+                on = a.speed > T.TECH_STILL && a.speed <= tech.speedMax;   // slow MOTION. stillness is the scarecrow's job.
+              } else if (a.tech === 'scarecrow') {
+                on = a.inRoom && a.speed <= T.TECH_STILL;                  // dead still, IN the room with them
+              }
+            }
+          }
+          a.charge = on ? Math.min(tech.chargeMax, a.charge + tech.chargeRate * DT)
+                        : Math.max(0, a.charge - tech.decay * DT);
+        }
+        if (a.hold) chainsawTick(who, a);
+      }
+    }
+
+    function chargeBand(frac) { const B = D().TECH_BANDS; for (const b of B) if (frac >= b.at) return b; return B[B.length - 1]; }
+
+    N.triggerTech = function (who) {
+      who = who || 'you';
+      const a = N.actors[who]; if (!a || N.alarm.active) return { ok: false };
+      const tech = techByKey[a.tech];
+      if (!tech || tech.key === 'pop' || tech.kind === 'hold') return { ok: false };   // pop = triggerBody; the saw is a hold pair
+      if (N.t < ready(who, tech.key)) return { ok: false, cooldown: true };
+      if (tech.needSprint && !a.sprintReady) return { ok: false, needSprint: true };   // a refusal burns NOTHING
+      setReady(who, tech.key, N.t + tech.cooldown);            // armed and thrown — from here it burns
+      const tgt = targetGroup(a, tech.behindM || tech.nearM);
+      if (!tgt) {                                              // fired into an empty hallway: the punchline
+        N.tally.walkby++; a.charge = 0;
+        N.emit('walkby', { body: true, who, tech: tech.key });
+        return { ok: true, grade: { mult: 0, label: 'MISS', id: 'miss' } };
+      }
+      let grade, power;
+      if (tech.kind === 'charge') {
+        grade = chargeBand(a.charge / tech.chargeMax);          // the band comes from charge %…
+        power = tech.power * (1 + a.charge);                    // …and the power scales 1x..(1+chargeMax)x
+      } else {
+        const G = D().GRADES;                                   // slider: the grade IS the runway length
+        grade = a.sprintT >= tech.sprintPerfectS ? G[0] : G[1];
+        power = tech.power;
+      }
+      /* every technique resolves fromBehind. The charge, the beat or the runway IS the skill
+         test — double-taxing the creep (which walks into the light on purpose) with the front
+         cone would punish the fiction. */
+      const res = applyScareToGroup(tgt.grp, who === 'you' ? 'you-body' : 'body:' + who,
+        power, grade.mult, { fromBehind: true, tech: tech.key });
+      a.charge = 0;
+      N.emit('grade', { label: grade.label, id: grade.id, body: true, who, tech: tech.key });
+      return { ok: true, grade, res };
+    };
+
+    N.holdStart = function (who) {
+      who = who || 'you';
+      const a = N.actors[who]; if (!a || N.alarm.active) return { ok: false };
+      const tech = techByKey[a.tech];
+      if (!tech || tech.kind !== 'hold') return { ok: false };
+      if (a.hold) return { ok: true };
+      if (N.t < ready(who, tech.key)) return { ok: false, cooldown: true };
+      a.hold = { until: N.t + tech.maxHoldS, startT: N.t };
+      a.holdHighSaid = false;
+      a.holdCounts = { magnitudeSum: 0, dropped: 0, melted: 0, gotem: 0, screams: 0, flinches: 0 };
+      if (D().TECH.revSpike && a.pitch <= tech.lowPitch) {      // the rev jump — only if it is aimed low
+        const tgt = targetGroup(a, tech.nearM);
+        if (tgt) for (const gst of tgt.grp.guests) {
+          if (gst.out || gst.chicken || gst.state === 'distress') continue;
+          const p = N.guestPos(gst);
+          if (Math.hypot(p.x - a.x, p.z - a.z) > tech.nearM) continue;
+          hitGuest(gst, tgt.grp, tech.power * D().ARCHETYPES[gst.arch].resist * D().GUEST.behindMult,
+            1.0, a.holdCounts, nearestNodeId(tgt.grp), 1);
+        }
+      }
+      return { ok: true };
+    };
+    N.holdEnd = function (who) { who = who || 'you'; const a = N.actors[who]; if (a && a.hold) endHold(who, a); return { ok: true }; };
+
+    function chainsawTick(who, a) {
+      const tech = techByKey.chainsaw;
+      if (N.alarm.active || N.t >= a.hold.until) return endHold(who, a);
+      if (a.pitch > tech.lowPitch) {                            // held HIGH: it fails, and everyone knows it
+        if (!a.holdHighSaid) {
+          a.holdHighSaid = true;
+          N.emit('chainsawHigh', { who });
+          const t2 = targetGroup(a, tech.nearM);
+          if (t2) t2.grp.prime = Math.max(0, t2.grp.prime - D().CHAINSAW_HIGH_PRIME_LOSS);
+        }
+        return;                                                 // no drain — but the clock keeps running
+      }
+      a.holdHighSaid = false;
+      const tgt = targetGroup(a, tech.nearM);
+      if (!tgt) return;
+      const primeMult = 1 + tgt.grp.prime / 180;
+      const nodeId = nearestNodeId(tgt.grp);
+      for (const gst of tgt.grp.guests) {
+        if (gst.out || gst.chicken || gst.state === 'distress') continue;
+        const p = N.guestPos(gst);
+        if (Math.hypot(p.x - a.x, p.z - a.z) > tech.nearM) continue;
+        const arch = D().ARCHETYPES[gst.arch];
+        hitGuest(gst, tgt.grp, tech.drainPerS * DT * arch.resist * primeMult * D().GUEST.behindMult,
+          1.0, a.holdCounts, nodeId, 0);
+        /* THE HERD. This is the point of the saw, and the emergence is deliberate: overusing it
+           closes the gap to the group ahead, i.e. the chainsaw MANUFACTURES conga lines. */
+        if (gst.state === 'walk') gst.s += tech.pushPerS * DT;
+      }
+    }
+    function endHold(who, a) {
+      const tech = techByKey.chainsaw;
+      setReady(who, tech.key, N.t + tech.cooldown);
+      const c = a.holdCounts;
+      if (c && c.magnitudeSum > 0.5) {
+        const tgt = targetGroup(a, tech.nearM + 4);
+        const grp = tgt ? tgt.grp : null;
+        /* ONE aggregate event, so the tape, bestScare and the walkie see one chainsaw RUN
+           rather than 135 ticks. ⚠️ `atT` is the run's START: R.mark centres a take on the
+           stamped time, and stamping the END would centre the tape on the aftermath.
+           ⚠️ magnitude is an INTEGRAL over seconds — divided before it competes with
+           instantaneous pops, or one saw run wins best-scare every single night. */
+        const result = { node: grp ? nearestNodeId(grp) : nodes[0].id,
+          source: who === 'you' ? 'you-body' : 'body:' + who,
+          dropped: c.dropped, melted: c.melted, gotem: c.gotem, screams: c.screams, flinches: c.flinches,
+          magnitude: c.magnitudeSum / D().TECH.holdMagDiv, group: grp ? grp.id : 0,
+          gradeMult: 1.0, tech: 'chainsaw', atT: a.hold ? a.hold.startT : N.t };
+        N.emit('scare', result);
+        if (!N.bestScare || result.magnitude > N.bestScare.magnitude) N.bestScare = { ...result, t: result.atT };
+      }
+      a.hold = null; a.holdCounts = null;
+    }
+
     N.triggerComedy = function (who) {
       who = who || 'you';
       if (N.t < (N.comedyReadyAt[who] || 0)) return { ok: false };
@@ -1092,6 +1415,7 @@
         if (N.t > N.ghostPlanned.at + 240) N.ghostPlanned.done = true; // she keeps her own hours
       }
       crewTick();
+      actorTick();
       // guests
       for (const gst of N.guests) {
         if (gst.out) continue;
@@ -1381,7 +1705,10 @@
       pos: node ? node.pos : [24, 14],
       source: ev.source, magnitude: ev.magnitude, dropped: ev.dropped || 0,
       melted: ev.melted || 0, gradeMult: ev.gradeMult || 1,
-      t: night.t, endAt: night.t + D().REPLAY.postS
+      /* ⚠️ an aggregate event (the chainsaw run) stamps its own START time. Centring a take
+         on night.t there would centre the tape on the aftermath, not the scare. */
+      t: ev.atT === undefined ? night.t : ev.atT,
+      endAt: (ev.atT === undefined ? night.t : ev.atT) + D().REPLAY.postS
     };
   };
 
@@ -1563,7 +1890,7 @@
       if (entry.seat === null) return;                       // never trust a seatless client
       entry.heard = nowMs();
       if (msg.t === 'cmd') fire('cmd', { seat: entry.seat, c: msg.c });
-      else if (msg.t === 'pos') fire('pos', { seat: entry.seat, x: msg.x, z: msg.z, yaw: msg.yaw });
+      else if (msg.t === 'pos') fire('pos', { seat: entry.seat, x: +msg.x || 0, z: +msg.z || 0, yaw: +msg.yaw || 0, pt: +msg.pt || 0 });
       /* hb needs no handler: the point was updating entry.heard, done above */
     });
     conn.on('close', () => {
@@ -1708,7 +2035,7 @@
     try { N.conns[0].conn.send(msg); } catch (e) { }
   };
   N.cmd = function (c) { N.toHost({ t: 'cmd', c }); };
-  N.pos = function (x, z, yaw) { N.toHost({ t: 'pos', x: r2(x), z: r2(z), yaw: r2(yaw) }); };
+  N.pos = function (x, z, yaw, pitch) { N.toHost({ t: 'pos', x: r2(x), z: r2(z), yaw: r2(yaw), pt: r2(pitch || 0) }); };
   function r2(v) { return Math.round(v * 100) / 100; }
 
   N.close = function () {
@@ -1751,11 +2078,34 @@
     }
     const st = {};
     for (const id of Object.keys(night.stations)) st[id] = r2(Math.max(0, night.stations[id].readyAt - night.t));
+    /* the performers. ~30 bytes a seat — noise beside the guest array, and it is what lets a
+       co-op guest's own charge meter and prompt work off snapshots without predicting anything.
+       Reads only: this function must never write to the night (test-net's byte-identity law). */
+    const ac = {};
+    if (night.actors) for (const who of Object.keys(night.actors)) {
+      const a = night.actors[who];
+      ac[who] = [TK().indexOf(a.tech), r2(a.charge), a.hold ? 1 : 0,
+        r2(a.hold ? Math.max(0, a.hold.until - night.t) : 0), a.sprintReady ? 1 : 0];
+    }
     return {
       t: 'snap', tt: r2(night.t), g: gs, st, nd: deltas || {}, crew: crew || [],
       tal: night.tally, dr: night.drawer, al: night.alarm.active ? 1 : 0, sp: night.spawned,
-      bd: night.bodyReadyAt, cd: night.comedyReadyAt
+      bd: night.bodyReadyAt, cd: night.comedyReadyAt, ac
     };
+  };
+
+  function TK() { return H.DATA.TECHNIQUES.map(t => t.key); }
+
+  /* the shape P.context and U.techBar read — identical to the host's night.actors, so neither
+     has to know which side of the wire it is on. */
+  N.readActors = function (snap, t) {
+    const out = {}, keys = TK();
+    for (const who of Object.keys(snap.ac || {})) {
+      const e = snap.ac[who] || [];
+      out[who] = { tech: keys[e[0]] || keys[0], charge: +e[1] || 0,
+        hold: e[2] ? { until: t + (+e[3] || 0) } : null, sprintReady: !!e[4] };
+    }
+    return out;
   };
 
   /* the render list a guest draws — same shape View.renderGuests takes from the live sim */
@@ -1813,7 +2163,7 @@
       });
       conn.send({ t: 'hello', name });
       G.cmd = c => conn.send({ t: 'cmd', c });
-      G.pos = (x, z, yaw) => conn.send({ t: 'pos', x, z, yaw });
+      G.pos = (x, z, yaw, pitch) => conn.send({ t: 'pos', x, z, yaw, pt: pitch || 0 });
       G.conn = conn;
       return G;
     },
@@ -2110,6 +2460,10 @@
     buildWorld();
   };
   V.setA11y = function (opts) { strobeOff = !!opts.strobeOff; reducedMotion = !!opts.reducedMotion; };
+  /* ⚠️ a getter, not `V.reducedMotion = reducedMotion` — a plain assignment at module scope
+     captures the value at load and every later toggle is ignored forever. */
+  Object.defineProperty(V, 'reducedMotion', { get: () => reducedMotion });
+  Object.defineProperty(V, 'strobeOff', { get: () => strobeOff });
 
   /* the barn in the morning: work lights up, fog thin, no theatre. you can see what you're building. */
   V.setDaylight = function (on) {
@@ -3420,7 +3774,7 @@
   const H = g.HAUNT;
   const P = {
     x: 4, y: 1.62, z: 14, yaw: Math.PI / 2, pitch: 0,
-    speed: 3.6, sprint: 5.6,
+    speed: 3.6, sprint: 5.6,        // fallbacks only — D.PLAYER is the authority (trap 2)
     keys: {}, locked: false, enabled: false,
     walls: null, freeRoam: false,
     actor: 'you'                      // which performer this client IS (co-op seats get their own id)
@@ -3449,7 +3803,9 @@
       P.pitch = Math.max(-1.45, Math.min(1.45, P.pitch));
     });
     addEventListener('keydown', e => { P.keys[e.code] = true; if (H.Game && H.Game.onKey) H.Game.onKey(e.code, e); });
-    addEventListener('keyup', e => { P.keys[e.code] = false; });
+    addEventListener('keyup', e => { P.keys[e.code] = false; if (H.Game && H.Game.onKeyUp) H.Game.onKeyUp(e.code); });
+    /* ⚠️ alt-tabbing away with E held would leave the saw revving into its own cooldown */
+    addEventListener('blur', () => { P.keys = {}; if (H.Game && H.Game.onKeyUp) H.Game.onKeyUp('KeyE'); });
   };
 
   P.spawnBackstage = function () { P.x = 4; P.z = 14; P.y = 1.62; P.yaw = -Math.PI / 2; P.pitch = 0; };
@@ -3461,7 +3817,13 @@
     if (!P.enabled) return;
     const fwd = (P.keys.KeyW ? 1 : 0) - (P.keys.KeyS ? 1 : 0);
     const str = (P.keys.KeyD ? 1 : 0) - (P.keys.KeyA ? 1 : 0);
-    let sp = (P.keys.ShiftLeft || P.keys.ShiftRight) ? P.sprint : P.speed;
+    /* ⚠️ THE CREEP IS A MECHANIC, NOT A COMFORT. The stalk demands you match guest pace
+       (1.15 m/s) and the creep demands you stay under 1.3 — a player who can only walk 3.6
+       or sprint 5.6 can never satisfy either, and two of the six trade verbs would be
+       unreachable decoration. Hold Ctrl. */
+    const PL = (H.DATA && H.DATA.PLAYER) || { walk: P.speed, sprint: P.sprint, creep: 1.05 };
+    const creeping = !!(P.keys.ControlLeft || P.keys.ControlRight);
+    let sp = (P.keys.ShiftLeft || P.keys.ShiftRight) ? PL.sprint : creeping ? PL.creep : PL.walk;
     if (fwd || str) {
       const sy = Math.sin(P.yaw), cy = Math.cos(P.yaw);
       let dx = (-sy * fwd + cy * str), dz = (-cy * fwd - sy * str);
@@ -3488,6 +3850,36 @@
         if (near(p.x, p.z, 7.5)) return { kind: 'rescue', id: gst.id, label: 'E — walk them out the quiet door (bo taught you the voice)' };
       }
     }
+    /* the trade verbs. Read uniformly off `night.actors` — which works on the real night AND on
+       a co-op guest's shadow, because applySnap decodes the wire's `ac` block into the same
+       {tech, charge, hold} shape. Guests render snapshots; they never predict. */
+    const a = (night && night.actors && night.actors[P.actor]) || null;
+    const tech = a && D.TECHNIQUES.find(t => t.key === a.tech);
+    if (night && a && tech && tech.key !== 'pop') {
+      const inRange = (r) => {
+        for (const gst of night.guests) {
+          if (gst.out || gst.chicken) continue;
+          const p = night.guestPos(gst);
+          if (near(p.x, p.z, r)) return true;
+        }
+        return false;
+      };
+      const cool = night.t < ((night.bodyReadyAt || {})[P.actor + ':' + tech.key] || 0);
+      if (tech.kind === 'hold' && !cool && inRange(tech.nearM)) {
+        return { kind: 'saw', label: P.pitch <= tech.lowPitch
+          ? 'HOLD E — rev low, walk them forward'
+          : 'HOLD E — and AIM DOWN. knees.' };
+      }
+      if (tech.kind === 'charge' && !cool && a.charge / tech.chargeMax >= D.TECH.fireMinFrac && inRange(tech.behindM || tech.nearM)) {
+        return { kind: 'tech', label: `E — spring the ${tech.name.replace('the ', '')} (${Math.round(100 * a.charge / tech.chargeMax)}%)` };
+      }
+      if (tech.needSprint && !cool && inRange(tech.nearM)) {
+        const ready = a.sprintReady === undefined ? true : !!a.sprintReady;
+        return ready
+          ? { kind: 'tech', label: 'E — SLIDE. take the whole row.' }
+          : { kind: 'peekinfo', label: 'the slider needs a running start (SPRINT first)' };
+      }
+    }
     // stations
     for (const slot of D.SLOTS) {
       const b = buildSlots[slot.id];
@@ -3503,7 +3895,9 @@
     // peek doors (body scare)
     for (const p of D.DOORS.peek) {
       if (near(p.x, p.z, 1.9)) {
-        const ready = !night || night.t >= (night.bodyReadyAt[P.actor] || 0);
+        if (a && a.tech && a.tech !== 'pop')
+          return { kind: 'peekinfo', label: 'the curtain wants the pop — press 1' };
+        const ready = !night || night.t >= ((night.bodyReadyAt || {})[P.actor + ':pop'] || 0);
         return { kind: 'peek', id: p.id, label: ready ? 'E — THE POP (through the curtain)' : 'catching your breath…', ready };
       }
     }
@@ -3581,6 +3975,24 @@
   #flashWhite{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none}
   #cooldowns{position:absolute;right:18px;bottom:70px;font-size:11px;color:#b8a070;text-align:right;text-shadow:0 1px 3px #000}
   #keysHelp{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);font-size:11px;letter-spacing:1px;color:#887650;text-shadow:0 1px 3px #000}
+  #techBar{position:absolute;left:50%;bottom:40px;transform:translateX(-50%);display:none;gap:6px}
+  .tk{width:46px;height:52px;border:1px solid #4a3820;border-radius:6px;background:rgba(14,10,6,.82);
+    text-align:center;color:#b8a070;position:relative;font-size:10px;line-height:1.15;overflow:hidden}
+  .tk .ic{font-size:17px;display:block;margin-top:5px;color:#e8dcc0}
+  .tk .n{position:absolute;top:1px;left:4px;font-size:9px;color:#8a7648}
+  .tk.sel{border-color:#c89a3a;background:rgba(58,38,14,.9);box-shadow:0 0 12px rgba(255,180,60,.25)}
+  .tk.locked{opacity:.32}.tk.locked .ic{filter:grayscale(1)}
+  .tk .cd{position:absolute;inset:auto 0 0 0;background:rgba(20,12,6,.78);color:#e8b23a;font-size:9px}
+  .tk.shake{animation:tkshake .3s}
+  @keyframes tkshake{25%{transform:translateX(-3px)}75%{transform:translateX(3px)}}
+  #chargeWrap{position:absolute;left:50%;bottom:104px;transform:translateX(-50%);width:154px;display:none;text-align:center}
+  #chargeTrack{height:8px;border-radius:3px;background:rgba(20,14,8,.8);border:1px solid #3e3018;overflow:hidden}
+  /* ⚠️ scaleX, never width: this is written every frame, and width forces style+layout on the
+     HUD overlay on top of the 3D scene. transform is compositor-only. No transition either —
+     a 0.1s transition restarted 60 times a second never lands, it just stutters. */
+  #chargeFill{height:100%;width:100%;transform:scaleX(0);transform-origin:left;background:#7a6236}
+  #chargeLabel{font-size:11px;letter-spacing:2px;color:#d8c08a;text-shadow:0 1px 3px #000;margin-top:3px}
+
   #clickHint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:none;text-align:center;
     font-size:16px;letter-spacing:3px;color:#ffe9b0;background:rgba(12,8,4,.82);border:1px solid #6a5028;
     border-radius:8px;padding:14px 26px;text-shadow:0 1px 4px #000}
@@ -3648,8 +4060,10 @@
         <div id="hudTop"></div><div id="hudNight"></div><div id="hudDrawer"></div>
         <div id="walkie"></div><div id="prompt"></div><div id="gradeFlash"></div>
         <div id="crosshair"></div><div id="cooldowns"></div>
+        <div id="techBar"></div>
+        <div id="chargeWrap"><div id="chargeTrack"><div id="chargeFill"></div></div><div id="chargeLabel"></div></div>
         <div id="clickHint">click to look around<small>wasd moves you either way · E acts · esc for the menu</small></div>
-        <div id="keysHelp">wasd move · shift run · mouse look · E act · Q the comedy beat · esc menu</div>
+        <div id="keysHelp">wasd move · shift run · CTRL creep · 1-6 the trade · E act · Q comedy beat · esc menu</div>
       </div>
       <div id="buildBar"></div>
       <div id="vignette"></div><div id="flashWhite"></div><div id="toast"></div>
@@ -3661,7 +4075,10 @@
       <div id="panelWrap"><div class="panel" id="panelCard"></div></div>
       <div id="veil"><div id="veilCard"></div></div>
       <div id="screen" class="full" style="display:none"><div class="panel card" id="screenCard"></div></div>`;
+    /* ⚠️ this list is an explicit WHITELIST — a new id that is not in it stays undefined on
+       U.els, and the first frame that touches it throws inside GAME.step and kills the loop. */
     ['hud', 'hudTop', 'hudNight', 'hudDrawer', 'walkie', 'prompt', 'gradeFlash', 'cooldowns', 'screen', 'screenCard',
+      'techBar', 'chargeWrap', 'chargeTrack', 'chargeFill', 'chargeLabel',
       'flashWhite', 'toast', 'buildBar', 'panelWrap', 'panelCard', 'vhs', 'vhsGrain', 'vhsBand', 'vhsTime', 'vhsBottom', 'vhsRec',
       'veil', 'veilCard']
       .forEach(id => U.els[id] = document.getElementById(id));
@@ -3800,14 +4217,70 @@
       : inWin ? '0 0 10px 3px rgba(255,233,176,.8)' : u01 > 0.4 ? '0 0 6px 1px rgba(255,207,90,.4)' : 'none';
   };
 
+  /* the technique bar owns every trade cooldown now; this corner keeps the comedy beat. */
   U.cooldowns = (night) => {
     if (!night) { U.els.cooldowns.innerHTML = ''; return; }
     const me = H.Player.actor;
-    const body = Math.max(0, (night.bodyReadyAt[me] || 0) - night.t);
-    const com = Math.max(0, (night.comedyReadyAt[me] || 0) - night.t);
-    U.els.cooldowns.innerHTML =
-      (body > 0 ? `the pop: ${body.toFixed(0)}s<br>` : `the pop: <span class="good">ready</span><br>`) +
-      (com > 0 ? `comedy beat: ${com.toFixed(0)}s` : `comedy beat: <span class="good">ready</span>`);
+    const com = Math.max(0, ((night.comedyReadyAt || {})[me] || 0) - night.t);
+    const txt = com > 0 ? `comedy beat: ${com.toFixed(0)}s` : `comedy beat: <span class="good">ready</span>`;
+    if (U.els.cooldowns.innerHTML !== txt) U.els.cooldowns.innerHTML = txt;
+  };
+
+  /* ---------- the trade: six slots, one charge meter ----------
+     House stable-DOM culture: the slots are built ONCE and only their text and classes move.
+     Rebuilding buttons on a ticker is how clicks get eaten. */
+  U.techBar = function (night, allowed) {
+    const bar = U.els.techBar; if (!bar) return;
+    if (!night) { bar.style.display = 'none'; U.els.chargeWrap.style.display = 'none'; return; }
+    const T = H.DATA.TECHNIQUES, me = H.Player.actor;
+    const a = (night.actors && night.actors[me]) || null;
+    if (!bar._slots) {
+      bar._slots = [];
+      T.forEach((t, i) => {
+        const d = document.createElement('div'); d.className = 'tk';
+        d.innerHTML = `<span class="n">${i + 1}</span><span class="ic">${t.icon}</span>${t.name.replace('the ', '')}<div class="cd"></div>`;
+        bar.appendChild(d); bar._slots.push(d);
+      });
+    }
+    /* ⚠️ set every call, never once on build: #hud is hidden and shown around menus, the tape
+       and build day, and a display latched at build time never comes back. */
+    bar.style.display = 'flex';
+    const allow = allowed || [];
+    for (let i = 0; i < T.length; i++) {
+      const t = T[i], d = bar._slots[i];
+      const locked = !allow.includes(t.key);
+      const cd = Math.max(0, ((night.bodyReadyAt || {})[me + ':' + t.key] || 0) - night.t);
+      d.classList.toggle('locked', locked);
+      d.classList.toggle('sel', !!a && a.tech === t.key);
+      const cdEl = d.lastElementChild;
+      const txt = locked ? 'night ' + t.unlock : cd > 0 ? cd.toFixed(0) + 's' : '';
+      if (cdEl.textContent !== txt) cdEl.textContent = txt;
+    }
+    const w = U.els.chargeWrap, tech = a && T.find(t => t.key === a.tech);
+    const show = !!(a && tech && ((tech.kind === 'charge' && a.charge > 0.01) || a.hold));
+    if (w._shown !== show) { w._shown = show; w.style.display = show ? 'block' : 'none'; }
+    if (!show) return;
+    let frac, bandId, label;
+    if (a.hold) {
+      frac = Math.max(0, (a.hold.until - night.t) / tech.maxHoldS);
+      bandId = 'saw'; label = 'REV LOW · WALK THEM FORWARD';
+    } else {
+      frac = Math.max(0, Math.min(1, a.charge / tech.chargeMax));
+      const band = H.DATA.TECH_BANDS.find(b => frac >= b.at) || H.DATA.TECH_BANDS[H.DATA.TECH_BANDS.length - 1];
+      bandId = band.id; label = band.label;
+    }
+    U.els.chargeFill.style.transform = 'scaleX(' + frac.toFixed(3) + ')';
+    if (w._band !== bandId) {
+      w._band = bandId;
+      U.els.chargeFill.style.background =
+        bandId === 'saw' ? '#c85a3a' : bandId === 'perfect' ? '#ffe9a0' : bandId === 'good' ? '#c8e8a0' : '#7a6236';
+    }
+    if (U.els.chargeLabel.textContent !== label) U.els.chargeLabel.textContent = label;
+  };
+  U.techShake = i => {
+    const bar = U.els.techBar, d = bar && bar._slots && bar._slots[i];
+    if (!d || (H.View && H.View.reducedMotion)) return;
+    d.classList.remove('shake'); void d.offsetWidth; d.classList.add('shake');
   };
 
   /* ---------- M5: build day, walked ---------- */
@@ -3951,7 +4424,8 @@
     quietT: 0, saidLate: false, saidLast: false, chickenSeen: 0, replay: null, stingData: null,
     wantLock: false, lockAt: 0,
     /* co-op (M6): shadow = a guest's read-only stand-in for the host's night */
-    shadow: null, deltas: {}, crew: [], crewPos: {}, snapT: 0, posT: 0, mpSlots: null, mpName: ''
+    shadow: null, deltas: {}, crew: [], crewPos: {}, snapT: 0, posT: 0, mpSlots: null, mpName: '',
+    shadowTechs: null, _sawOn: false, _sawLow: false, _band: -1
   };
 
   /* ---------------- save ---------------- */
@@ -3965,7 +4439,7 @@
       noteOwed: 0, notePaidAll: true, paymentsDone: 0,
       nights: 0, seasonGuests: 0, dropped: 0, melted: 0, delight: 0, polaroids: [],
       bounty: false, ghostArmed: true, ghostSeen: 0, endings: {}, endless: 0,
-      marshalFails: 0, seasonSeed: 7411, softNext: false,
+      marshalFails: 0, seasonSeed: 7411, softNext: false, schoolSeen: {},
       settings: { muted: false, strobeOff: false, reducedMotion: false }
     };
   }
@@ -4010,6 +4484,7 @@
     if (GAME.state === 'night' && GAME.night) {
       /* the barn's owner: the one true sim runs here */
       H.Player.update(dt);
+      feedActors();
       GAME.night.tick(dt);
       drainEvents();
       GAME.deltas = nodeDeltas(GAME.night);
@@ -4023,6 +4498,8 @@
       H.View.syncCrew(otherCrew());
       H.UI.hudNight(GAME.night, GAME.S);
       H.UI.cooldowns(GAME.night);
+      H.UI.techBar(GAME.night, GAME.night.techsAllowed);
+      techAudio(GAME.night);
       H.UI.prompt(H.Player.context(GAME.night, GAME.S.build.slots));
       H.UI.clickHint(!H.Player.locked);
       if (GAME.night.done) return sting();
@@ -4037,6 +4514,8 @@
       H.View.syncCrew(otherCrew());
       H.UI.hudNight(GAME.shadow, GAME.S);
       H.UI.cooldowns(GAME.shadow);
+      H.UI.techBar(GAME.shadow, GAME.shadowTechs || []);
+      techAudio(GAME.shadow);
       H.UI.prompt(H.Player.context(GAME.shadow, GAME.mpSlots || {}));
       H.UI.clickHint(!H.Player.locked);
     } else if (GAME.state === 'build3d') {
@@ -4050,6 +4529,45 @@
     }
     H.View.update(GAME.night || GAME.shadow, H.Player, GAME.S ? GAME.S.build.slots : {}, dt, GAME.deltas);
   };
+
+  /* Every performer's body, handed to the sim as an INPUT. Note what is NOT sent: speed.
+     The sim derives it from the accepted step on its own 30 Hz clock, so the host and every
+     guest measure one number the same way — and a seat cannot simply assert that it is
+     sprinting, or standing inside a group. */
+  /* the charge, by ear. One blip per band CROSSING and a saw that idles while it is held —
+     so a player can run the whole trade without looking down at a meter. Works on a co-op
+     guest too: the shadow's actors come off the wire in the same shape. */
+  function techAudio(N) {
+    const a = N && N.actors && N.actors[H.Player.actor];
+    const saw = D().TECHNIQUES.find(t => t.key === 'chainsaw');
+    const holding = !!(a && a.hold);
+    const low = H.Player.pitch <= saw.lowPitch;
+    if (holding !== GAME._sawOn || (holding && low !== GAME._sawLow)) {
+      GAME._sawOn = holding; GAME._sawLow = low;
+      H.Audio.saw(holding, low);
+    }
+    let band = -1;
+    if (a) {
+      const T = D().TECHNIQUES.find(t => t.key === a.tech);
+      if (T && T.kind === 'charge' && a.charge > 0) band = D().TECH_BANDS.findIndex(b => a.charge / T.chargeMax >= b.at);
+    }
+    // TECH_BANDS runs best-first, so RIPENING means the index falls
+    if (band !== GAME._band) {
+      if (band >= 0 && GAME._band > band) H.Audio.bandUp(band);
+      GAME._band = band;
+    }
+  }
+
+  function feedActors() {
+    const N = GAME.night; if (!N) return;
+    const B = D().BARN, P = H.Player;
+    const inRoom = (x, z) => x > B.x0 && x < B.x1 && z > B.z0 && z < B.z1 && !H.Barn.inSpine(x, z);
+    N.setActor(P.actor, { x: P.x, z: P.z, inRoom: inRoom(P.x, P.z), pitch: P.pitch });
+    for (const seat of Object.keys(GAME.crewPos)) {
+      const p = GAME.crewPos[seat];
+      N.setActor(H.Net.actorOf(+seat), { x: p.x, z: p.z, inRoom: inRoom(p.x, p.z), pitch: p.pt || 0 });
+    }
+  }
 
   /* the crowd you hear through the wall — and the DIP that means they're nearly on you (bible §6.1) */
   function crowdAudio(dt, N) {
@@ -4105,7 +4623,7 @@
     GAME.posT -= dt;
     if (GAME.posT > 0) return;
     GAME.posT = 1 / D().NET.posHz;
-    H.Net.pos(H.Player.x, H.Player.z, H.Player.yaw);
+    H.Net.pos(H.Player.x, H.Player.z, H.Player.yaw, H.Player.pitch);
   }
 
   /* a guest's stand-in for the night: enough shape that the HUD, the prompt and the
@@ -4116,7 +4634,7 @@
       t: 0, done: false, nightDef: nd, softScare: !!start.softScare,
       guests: [], stations: {}, drawer: 0, spawned: 0, _clock: '7:00 pm',
       tally: { flinch: 0, scream: 0, gotem: 0, dropped: 0, melted: 0, walkby: 0, complaints: 0, rescues: 0, chickened: 0, delight: 0, polaroids: 0, bounty: false, ghost: 0, conga: 0, alarms: 0 },
-      alarm: { active: false }, bodyReadyAt: {}, comedyReadyAt: {},
+      alarm: { active: false }, bodyReadyAt: {}, comedyReadyAt: {}, actors: {},
       guestPos(gst) { return { x: gst.x, z: gst.z, dirX: 0, dirZ: 1 }; },
       clock() { return sh._clock; }
     };
@@ -4132,6 +4650,7 @@
     sh.alarm.active = !!snap.al; sh.bodyReadyAt = snap.bd || {}; sh.comedyReadyAt = snap.cd || {};
     sh._clock = snap.ck || sh._clock;
     sh.guests = H.Net.readGuests(snap);
+    sh.actors = H.Net.readActors(snap, sh.t);   // this is how a guest sees their OWN charge
     for (const id of Object.keys(sh.stations)) sh.stations[id].readyAt = sh.t + (snap.st[id] || 0);
     GAME.deltas = snap.nd || {};
     GAME.crew = snap.crew || [];
@@ -4147,18 +4666,22 @@
       else if (GAME.night && !GAME.night.done) {
         H.Net.toSeat(msg.seat, {
           t: 'start', nightIdx: GAME.S.nightIdx, slots: GAME.S.build.slots,
-          softScare: !!GAME.S.softNext, label: GAME.night.nightDef.label
+          softScare: !!GAME.S.softNext, label: GAME.night.nightDef.label, techs: GAME.night.techsAllowed
         });
       }
     }
-    else if (type === 'leave') { H.UI.toast(`${msg.name} left.`); delete GAME.crewPos[msg.seat]; if (GAME.state === 'mplobby') mpLobbyScreen(); }
+    else if (type === 'leave') {
+      H.UI.toast(`${msg.name} left.`); delete GAME.crewPos[msg.seat];
+      if (GAME.night) GAME.night.dropActor(H.Net.actorOf(msg.seat));   // never leave a ghost saw running
+      if (GAME.state === 'mplobby') mpLobbyScreen();
+    }
     else if (type === 'roster') { if (GAME.state === 'mplobby') mpLobbyScreen(); }
     else if (type === 'seat') { H.Player.actor = H.Net.actorOf(msg.seat); if (GAME.state === 'mplobby') mpLobbyScreen(); }
     else if (type === 'full') { H.UI.toast('that barn is full. four monsters is the fire code.'); }
     else if (type === 'cmd') hostApplyCmd(msg.seat, msg.c);
     else if (type === 'pos') {
       const r = H.Net.roster.find(x => x.seat === msg.seat);
-      GAME.crewPos[msg.seat] = { x: msg.x, z: msg.z, yaw: msg.yaw, name: r ? r.name : 'a monster' };
+      GAME.crewPos[msg.seat] = { x: msg.x, z: msg.z, yaw: msg.yaw, pt: +msg.pt || 0, name: r ? r.name : 'a monster' };
     }
     else if (type === 'start') guestStart(msg);
     else if (type === 'snap') applySnap(msg);
@@ -4193,6 +4716,12 @@
       N.triggerComedy(who);
     } else if (c.k === 'rescue') {
       N.rescue(c.id);
+    } else if (c.k === 'tech') {
+      N.setTechnique(who, String(c.key || ''));   // refuses junk AND anything scare school hasn't covered
+    } else if (c.k === 'fire') {
+      N.triggerTech(who);                          // the host recomputes the target from ITS actor state
+    } else if (c.k === 'hold') {
+      if (c.on) N.holdStart(who); else N.holdEnd(who);
     }
   }
 
@@ -4201,6 +4730,17 @@
     H.View.leverHand(); H.Audio.lever();
     if (GAME.night) GAME.night.triggerStation(id, false, H.Player.actor);
     else H.Net.cmd({ k: 'station', id });
+  }
+  function doTech() {
+    const r = GAME.night ? GAME.night.triggerTech(H.Player.actor) : (H.Net.cmd({ k: 'fire' }), null);
+    if (r && r.needSprint) return H.UI.toast(rnd(D().VOICE.tech.noRunway));
+    H.View.popHands();
+    if (r && r.grade && r.grade.id !== 'miss') { const a = GAME.night.actors[H.Player.actor]; if (a && a.tech === 'slider') H.Audio.slide(); }
+  }
+  function doHold(on) {
+    if (GAME.night) { if (on) GAME.night.holdStart(H.Player.actor); else GAME.night.holdEnd(H.Player.actor); }
+    else H.Net.cmd({ k: 'hold', on: on ? 1 : 0 });
+    if (on) H.View.popHands();
   }
   function doBody(peekId) {
     H.Audio.pop(); H.Audio.cloth(); H.View.popHands(peekId);
@@ -4326,7 +4866,7 @@
         case 'grade': {
           const mine = !ev.who || ev.who === H.Player.actor;
           if (mine) { H.UI.grade(ev.label, ev.id); if (!ev.byCrew) H.Audio.grade(ev.id); }
-          else if (ev.id === 'perfect') walkieSay(`${H.Net.nameOf(ev.who)} hit it on the beat.`);
+          else if (ev.id === 'perfect') walkieSay(ev.tech ? rnd(D().VOICE.tech.charged) : `${H.Net.nameOf(ev.who)} hit it on the beat.`);
           if (ev.id === 'perfect') {
             GAME.perfectRun++; GAME.walkbyRun = 0;
             if (GAME.perfectRun === 3) walkieSay(rnd(V.streak), true);
@@ -4364,6 +4904,7 @@
         case 'conga': walkieSay(rnd(V.conga), true); break;
         case 'alarm': H.Audio.alarm(true); walkieSay(rnd(V.alarm), true); H.UI.toast('THE ALARM. lights up. fog dead. breathe. reset the season’s pride tomorrow.'); break;
         case 'alarmOver': H.Audio.alarm(false); walkieSay('alarm reset. the dark comes back on slow.', true); break;
+        case 'chainsawHigh': walkieSay(rnd(V.tech.sawHigh), true); break;
         case 'ghost': H.Audio.ghost(); H.View.fx(ev); setTimeout(() => walkieSay(rnd(V.ghost), true), 1600); break;
         case 'spawn':
           if (Math.random() < 0.3) H.Audio.doorCreak();
@@ -4428,6 +4969,9 @@
   }
 
   function seasonHub() {
+    /* scare school: the season finally TEACHES the trade instead of silently unlocking it. */
+    const due = D().TECHNIQUES.find(t => t.unlock > 0 && t.unlock <= GAME.S.nightIdx && !(GAME.S.schoolSeen || {})[t.key]);
+    if (due) return schoolBeat(due);
     GAME.state = 'season';
     H.UI.showHud(false); H.Player.enabled = false;
     const s = GAME.S;
@@ -4626,7 +5170,7 @@
     H.View.setBuildMode(false, GAME.S.build.slots);
     H.View.setDaylight(false);
     H.UI.buildBar(null); H.UI.panel(null); H.UI.showHud(false); H.UI.prompt(null);
-    H.UI.keysHelp('wasd move · shift run · mouse look · E act · Q the comedy beat · esc menu');
+    H.UI.keysHelp('wasd move · shift run · CTRL creep · 1-6 the trade · E act · Q comedy beat · esc menu');
     H.Player.enabled = false;
     dropLock();
   }
@@ -4869,6 +5413,7 @@
 
   function guestStart(msg) {
     GAME.mpSlots = msg.slots || {};
+    GAME.shadowTechs = msg.techs || D().TECHNIQUES.filter(t => t.unlock <= (msg.nightIdx || 0)).map(t => t.key);
     GAME.shadow = makeShadow(msg);
     GAME.night = null;
     GAME.crewPos = {}; GAME.crew = []; GAME.deltas = {};
@@ -4880,7 +5425,7 @@
     H.View.syncStations(GAME.mpSlots);
     H.View.handsIdle();
     H.UI.buildBar(null);
-    H.UI.keysHelp('wasd move · shift run · mouse look · E act · Q the comedy beat · esc menu');
+    H.UI.keysHelp('wasd move · shift run · CTRL creep · 1-6 the trade · E act · Q comedy beat · esc menu');
     H.UI.screen(null); H.UI.showHud(true);
     H.Player.enabled = true; H.Player.spawnBackstage();
     H.Audio.startNightBed();
@@ -4989,7 +5534,7 @@
       H.Player.actor = H.Net.actorOf(0);
       H.Net.broadcast({
         t: 'start', nightIdx: s.nightIdx, slots: s.build.slots,
-        softScare: !!s.softNext, label: nd.label
+        softScare: !!s.softNext, label: nd.label, techs: GAME.night.techsAllowed
       });
     }
     H.View.setBuildMode(false, s.build.slots);
@@ -4997,7 +5542,7 @@
     H.View.syncStations(s.build.slots);
     H.View.handsIdle();
     H.UI.buildBar(null);
-    H.UI.keysHelp('wasd move · shift run · mouse look · E act · Q the comedy beat · esc menu');
+    H.UI.keysHelp('wasd move · shift run · CTRL creep · 1-6 the trade · E act · Q comedy beat · esc menu');
     H.UI.screen(null); H.UI.showHud(true);
     H.Player.enabled = true; H.Player.spawnBackstage();
     H.Audio.startNightBed();
@@ -5012,12 +5557,28 @@
     if (GAME.state === 'night') {
       const N = GAME.night || GAME.shadow;
       if (!N) return;
+      if (e && e.repeat) return;                     // holding E must not machine-gun keydowns
+      if (/^Digit[1-6]$/.test(code)) {
+        const i = +code.slice(5) - 1, t = D().TECHNIQUES[i];
+        if (!t) return;
+        const allowed = (GAME.night ? GAME.night.techsAllowed : (GAME.shadowTechs || [])).includes(t.key);
+        if (!allowed) {
+          H.UI.toast(rnd(D().VOICE.tech.locked) + ' (' + t.name + ' — night ' + t.unlock + ')');
+          H.UI.techShake(i); return;
+        }
+        if (GAME.night) GAME.night.setTechnique(H.Player.actor, t.key);
+        else H.Net.cmd({ k: 'tech', key: t.key });
+        H.Audio.lever();
+        return;
+      }
       if (code === 'KeyE') {
         const ctx = H.Player.context(N, GAME.night ? GAME.S.build.slots : (GAME.mpSlots || {}));
         if (!ctx) return;
-        if (ctx.kind === 'station' && !ctx.cool && !ctx.broken) doStation(ctx.id);
+        if (ctx.kind === 'rescue') doRescue(ctx.id);
+        else if (ctx.kind === 'saw') doHold(true);
+        else if (ctx.kind === 'tech') doTech();
+        else if (ctx.kind === 'station' && !ctx.cool && !ctx.broken) doStation(ctx.id);
         else if (ctx.kind === 'peek' && ctx.ready) doBody(ctx.id);
-        else if (ctx.kind === 'rescue') doRescue(ctx.id);
       } else if (code === 'KeyQ') {
         doComedy();
       } else if (code === 'Escape') {
@@ -5035,6 +5596,11 @@
       else if (code === 'Enter' || code === 'NumpadEnter') { leaveBuildWalk(); castCall(); }
       else if (code === 'Escape') buildMenuPanel();
     } else if (GAME.state === 'freeroam' && code === 'Escape') seasonHub();
+  };
+  /* the saw stops when you let go — and also if the window loses focus mid-rev, or a held key
+     would keep drinking the cooldown with nobody at the wheel. */
+  GAME.onKeyUp = function (code) {
+    if (code === 'KeyE' && GAME.state === 'night') doHold(false);
   };
   GAME.onLockChange = function (locked) {
     if (locked) return;
@@ -5067,6 +5633,24 @@
       H.UI.toast('night abandoned. the town is confused but forgiving. once.');
       seasonHub();
     });
+  }
+
+  function schoolBeat(t) {
+    GAME.state = 'school';
+    H.UI.showHud(false); H.Player.enabled = false;
+    const coach = D().CREW.find(c => c.id === t.coach) || { name: 'somebody' };
+    if (!GAME.S.schoolSeen) GAME.S.schoolSeen = {};
+    GAME.S.schoolSeen[t.key] = 1; save();
+    const i = D().TECHNIQUES.indexOf(t) + 1;
+    H.UI.screen(
+      '<h1 style="font-size:24px">scare school</h1>' +
+      '<h2>' + coach.name + ' stays after close · ' + t.name + '</h2>' +
+      '<p style="font-size:34px;text-align:center;letter-spacing:8px">' + t.icon + '</p>' +
+      '<p><b>' + t.desc + '</b></p><p>' + t.how + '</p>' +
+      '<p style="color:#8a7a58">' + rnd(D().VOICE.school[t.key] || ['']) + '</p>' +
+      '<p class="warn">press ' + i + ' in the walls to take it out tonight.</p>' +
+      '<button class="btn primary" id="btnSchoolOk">got it. probably.</button>');
+    H.UI.on('btnSchoolOk', seasonHub);
   }
 
   /* ---------------- the sting ---------------- */

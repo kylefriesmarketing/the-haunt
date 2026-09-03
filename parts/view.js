@@ -283,6 +283,10 @@
     buildWorld();
   };
   V.setA11y = function (opts) { strobeOff = !!opts.strobeOff; reducedMotion = !!opts.reducedMotion; };
+  /* ⚠️ a getter, not `V.reducedMotion = reducedMotion` — a plain assignment at module scope
+     captures the value at load and every later toggle is ignored forever. */
+  Object.defineProperty(V, 'reducedMotion', { get: () => reducedMotion });
+  Object.defineProperty(V, 'strobeOff', { get: () => strobeOff });
 
   /* the barn in the morning: work lights up, fog thin, no theatre. you can see what you're building. */
   V.setDaylight = function (on) {

@@ -100,7 +100,7 @@
       if (entry.seat === null) return;                       // never trust a seatless client
       entry.heard = nowMs();
       if (msg.t === 'cmd') fire('cmd', { seat: entry.seat, c: msg.c });
-      else if (msg.t === 'pos') fire('pos', { seat: entry.seat, x: msg.x, z: msg.z, yaw: msg.yaw });
+      else if (msg.t === 'pos') fire('pos', { seat: entry.seat, x: +msg.x || 0, z: +msg.z || 0, yaw: +msg.yaw || 0, pt: +msg.pt || 0 });
       /* hb needs no handler: the point was updating entry.heard, done above */
     });
     conn.on('close', () => {
@@ -245,7 +245,7 @@
     try { N.conns[0].conn.send(msg); } catch (e) { }
   };
   N.cmd = function (c) { N.toHost({ t: 'cmd', c }); };
-  N.pos = function (x, z, yaw) { N.toHost({ t: 'pos', x: r2(x), z: r2(z), yaw: r2(yaw) }); };
+  N.pos = function (x, z, yaw, pitch) { N.toHost({ t: 'pos', x: r2(x), z: r2(z), yaw: r2(yaw), pt: r2(pitch || 0) }); };
   function r2(v) { return Math.round(v * 100) / 100; }
 
   N.close = function () {
@@ -288,11 +288,34 @@
     }
     const st = {};
     for (const id of Object.keys(night.stations)) st[id] = r2(Math.max(0, night.stations[id].readyAt - night.t));
+    /* the performers. ~30 bytes a seat — noise beside the guest array, and it is what lets a
+       co-op guest's own charge meter and prompt work off snapshots without predicting anything.
+       Reads only: this function must never write to the night (test-net's byte-identity law). */
+    const ac = {};
+    if (night.actors) for (const who of Object.keys(night.actors)) {
+      const a = night.actors[who];
+      ac[who] = [TK().indexOf(a.tech), r2(a.charge), a.hold ? 1 : 0,
+        r2(a.hold ? Math.max(0, a.hold.until - night.t) : 0), a.sprintReady ? 1 : 0];
+    }
     return {
       t: 'snap', tt: r2(night.t), g: gs, st, nd: deltas || {}, crew: crew || [],
       tal: night.tally, dr: night.drawer, al: night.alarm.active ? 1 : 0, sp: night.spawned,
-      bd: night.bodyReadyAt, cd: night.comedyReadyAt
+      bd: night.bodyReadyAt, cd: night.comedyReadyAt, ac
     };
+  };
+
+  function TK() { return H.DATA.TECHNIQUES.map(t => t.key); }
+
+  /* the shape P.context and U.techBar read — identical to the host's night.actors, so neither
+     has to know which side of the wire it is on. */
+  N.readActors = function (snap, t) {
+    const out = {}, keys = TK();
+    for (const who of Object.keys(snap.ac || {})) {
+      const e = snap.ac[who] || [];
+      out[who] = { tech: keys[e[0]] || keys[0], charge: +e[1] || 0,
+        hold: e[2] ? { until: t + (+e[3] || 0) } : null, sprintReady: !!e[4] };
+    }
+    return out;
   };
 
   /* the render list a guest draws — same shape View.renderGuests takes from the live sim */
@@ -350,7 +373,7 @@
       });
       conn.send({ t: 'hello', name });
       G.cmd = c => conn.send({ t: 'cmd', c });
-      G.pos = (x, z, yaw) => conn.send({ t: 'pos', x, z, yaw });
+      G.pos = (x, z, yaw, pitch) => conn.send({ t: 'pos', x, z, yaw, pt: pitch || 0 });
       G.conn = conn;
       return G;
     },

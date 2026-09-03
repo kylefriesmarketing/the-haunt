@@ -85,7 +85,10 @@
       pos: node ? node.pos : [24, 14],
       source: ev.source, magnitude: ev.magnitude, dropped: ev.dropped || 0,
       melted: ev.melted || 0, gradeMult: ev.gradeMult || 1,
-      t: night.t, endAt: night.t + D().REPLAY.postS
+      /* ⚠️ an aggregate event (the chainsaw run) stamps its own START time. Centring a take
+         on night.t there would centre the tape on the aftermath, not the scare. */
+      t: ev.atT === undefined ? night.t : ev.atT,
+      endAt: (ev.atT === undefined ? night.t : ev.atT) + D().REPLAY.postS
     };
   };
 

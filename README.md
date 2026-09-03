@@ -202,3 +202,48 @@ fourth and they will fight again.
 the next tick, so a test that writes `alarm.active = true` every frame makes the mode ping-pong
 night↔alarm and never settles — it looks exactly like a broken strike envelope. Set
 `alarm.until = night.t + 60` to hold it.
+
+## Trap 16 — the six trade verbs, and why the CREEP KEY is a mechanic (v0.13.0)
+
+`D.TECHNIQUES` finally has a kernel behind it. `parts/sim.js` gained `N.setActor` /
+`N.setTechnique` / `N.triggerTech` / `N.holdStart` / `N.holdEnd` / `N.dropActor` and an
+`actorTick()` that runs once per sim tick, right after `crewTick()`.
+
+**Actor kinematics are INPUTS, exactly like `triggerStation`** — same seed plus the same
+input script is the same night. Run `node test-tech.mjs` after ANY edit in that block.
+
+⚠️ **`D.PLAYER.creep` (Ctrl, 1.05 m/s) is load-bearing, not a comfort feature.** The stalk
+demands you match guest pace (1.15 ± `paceTol`) and the creep demands you stay under
+`speedMax` 1.3. A player who can only walk 3.6 or sprint 5.6 satisfies neither, and two of
+the six verbs ship as pure decoration. Any change to those speeds must be checked against
+both gates.
+
+⚠️ **THE NO-RNG LAW.** Nothing in the technique kernel may consume `rng`. A charge is pure
+skill, so an actor who charges to full all night and never fires must leave the tally and the
+drawer byte-identical (`test-tech.mjs` T13 is the guard). Break this and every replay bottle
+and every co-op session desyncs the moment somebody holds a charge.
+
+⚠️ **`setActor` records the WANTED position, never the accepted one.** `actorTick` clamps it
+into `D.BARN` and rate-limits the step to `TECH.posSpeedMax` on the 30 Hz sim clock, then
+derives speed from the accepted step. Two reasons, both load-bearing: the host must not trust
+a position off the wire (trap 12 — a seat could otherwise pose itself inside a group from
+anywhere), and host and guests have to measure speed on ONE clock. Deriving it from render
+`dt` on one side and snapshot arrival on the other makes the same run pass a gate for one seat
+and fail for another. For the same reason `sprinting` is NOT sent: it is derived.
+
+⚠️ **`hitGuest`'s `floor` argument.** A discrete hit floors at 1 damage. A continuous drain
+(the chainsaw, 30 ticks a second) passes **0** — with a floor of 1 the saw would deal 30/s to
+exactly the guests the soft-scare and immune clamps exist to protect. `test-tech.mjs` T11 is
+the guard: family hour must survive a full saw run at zero complaints.
+
+⚠️ **A held technique's magnitude is an INTEGRAL over seconds.** `endHold` divides by
+`TECH.holdMagDiv` before it competes with instantaneous pops, or one chainsaw run wins
+best-scare and the tape every single night. It also stamps `atT` with the run's START — `R.mark`
+centres a take on the stamped time, and stamping the end centres the tape on the aftermath.
+
+⚠️ **Cooldowns are now keyed `who + ':' + techKey`.** The wire field (`bd`) is unchanged, only
+the keys got richer. If you ever read `bodyReadyAt[actor]` with a bare actor id again, it will
+silently always be ready.
+
+⚠️ **`V.reducedMotion` is a GETTER.** A plain `V.reducedMotion = reducedMotion` at module scope
+captures `false` at load and every later toggle is ignored forever.

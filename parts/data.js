@@ -8,7 +8,7 @@
   D.TITLE = 'THE HAUNT';
   D.SUBTITLE = 'the scream barn · route 9 · hazel park';
   D.SAVE_KEY = 'haunt-save';
-  D.VERSION = '0.12.0';
+  D.VERSION = '0.13.0';
 
   /* ---------------- the barn (meters, y-up; x east, z south) ----------------
      Guests snake: row A east, cross the east passage, row B west, out.
@@ -109,7 +109,6 @@
     flashCam:    { name: 'scare-cam',    power: 6,  cost: [300, 200, 380], resetS: 10, desc: 'the flash catches the whole group mid-scream. lobby wall material.' }
   };
   D.TIER_MULT = [1, 1.35, 1.8];        // power multiplier by tier
-  D.BODY_SCARE = { power: 30, cooldown: 9, energyCost: 9 };  // your pop-out from a peek door
 
   /* ---------------- scare school (bible §6.2) ----------------
      Six techniques the trade actually names, learned across the season. Each is a DIFFERENT
@@ -120,7 +119,7 @@
      `unlock` is the night index it's taught on. */
   D.TECHNIQUES = [
     {
-      key: 'pop', name: 'the pop', icon: '!', unlock: 0, kind: 'instant',
+      key: 'pop', name: 'the pop', icon: '!', unlock: 0, kind: 'instant', coach: 'bo',
       power: 30, cooldown: 9,
       desc: 'through the curtain, on the beat. never say boo.',
       how: 'stand at a peek door and fire in the window.'
@@ -128,30 +127,35 @@
     {
       key: 'stalk', name: 'the stalk', icon: '⟶', unlock: 2, kind: 'charge',
       power: 15, cooldown: 12, chargeRate: 0.55, chargeMax: 3.0, decay: 1.1, behindM: 7.5,
+      coach: 'dee', paceTol: 0.65,   // m/s window around GUEST.speed that counts as matching their pace
       desc: 'match their pace, stay behind them, let it get unbearable.',
       how: 'follow a group from BEHIND. the longer they feel watched, the harder it lands.'
     },
     {
       key: 'creep', name: 'the creep', icon: '◡', unlock: 4, kind: 'charge',
       power: 17, cooldown: 12, chargeRate: 0.7, chargeMax: 2.6, decay: 2.4, speedMax: 1.3, nearM: 9,
+      coach: 'grace',
       desc: 'inhuman-slow, into the light, wrong at every joint.',
       how: 'move SLOWLY near them. any hurry and the spell breaks.'
     },
     {
       key: 'scarecrow', name: 'the scarecrow', icon: '†', unlock: 6, kind: 'charge',
       power: 20, cooldown: 16, chargeRate: 0.5, chargeMax: 3.6, decay: 4.0, nearM: 9, mustBeInRoom: true,
+      coach: 'priya',
       desc: 'be a prop. be furniture. wait. (the trade calls it the scarecrow routine.)',
       how: 'stand DEAD STILL in the room with them — not backstage — and do not twitch.'
     },
     {
       key: 'chainsaw', name: 'the chainsaw run', icon: '⚙', unlock: 8, kind: 'hold',
       power: 9, cooldown: 20, drainPerS: 8, maxHoldS: 4.5, nearM: 7, pushPerS: 0.9, lowPitch: -0.04,
+      coach: 'marcus',
       desc: 'rev LOW, by the legs. held high it fails and everyone knows it.',
       how: 'hold E near them and AIM DOWN. it herds them forward — that is the point.'
     },
     {
       key: 'slider', name: 'the slider', icon: '↘', unlock: 11, kind: 'instant',
       power: 34, cooldown: 22, needSprint: true, wide: true, nearM: 8,
+      coach: 'tater', sprintNeedS: 0.5, sprintPerfectS: 1.2, sprintGraceS: 0.35,
       desc: 'knee-plates. in at their feet. knott\'s invented it and never apologised.',
       how: 'SPRINT, then fire — it takes the whole group at once. the showpiece.'
     }
@@ -204,6 +208,32 @@
     { id: 'late',    within: 99,   mult: 0.3,  label: 'late.' }
   ];
   D.MISS_PRIME_LOSS = 8;
+  /* ---------------- the trade: technique tuning (bible §6.2) ---------------- */
+  /* ⚠️ THE CREEP SPEED IS LOAD-BEARING, NOT FLAVOUR. The stalk must match guest pace
+     (1.15 m/s ± paceTol) and the creep must stay under speedMax 1.3 — a player who can only
+     walk 3.6 or sprint 5.6 can never satisfy either gate, and both techniques would ship as
+     pure decoration. Hold Ctrl to creep. */
+  D.PLAYER = { walk: 3.6, sprint: 5.6, creep: 1.05 };
+
+  D.TECH = {
+    fireMinFrac: 0.25,   // below this charge, E prefers a station under your hand (§5 priority ladder)
+    sprintMin: 4.6,      // m/s — you count as sprinting above this (walk 3.6, sprint 5.6)
+    posSpeedMax: 7,      // hard ceiling on how fast ANY actor may be seen to move (the host trusts nothing)
+    tailTolM: 0.8,       // how far past a group's rearmost you may stand and still be "behind" them
+    revSpike: true,      // the chainsaw lands its `power` once at holdStart — the rev jump
+    holdMagDiv: 6        // a hold's magnitude is an INTEGRAL over seconds; divide before it competes
+                         // with instantaneous pops for bestScare, or one saw run wins every night
+  };
+  /* charge → grade. Bands mirror D.GRADES multipliers so the melt (>=1.35), bounty (>=1.4)
+     and polaroid (>=1.1) gates keep working with no special-casing. */
+  D.TECH_BANDS = [
+    { at: 0.90, id: 'perfect', mult: 1.5,  label: 'UNBEARABLE' },
+    { at: 0.55, id: 'good',    mult: 1.15, label: 'they felt it' },
+    { at: 0.25, id: 'early',   mult: 0.55, label: 'half-baked…' },
+    { at: 0.00, id: 'late',    mult: 0.3,  label: 'nothing there.' }
+  ];
+  D.CHAINSAW_HIGH_PRIME_LOSS = 6;   // held high: the group relaxes and someone points
+
 
   /* ---------------- guests ---------------- */
   D.GUEST = {
@@ -401,6 +431,20 @@
 
   /* ---------------- voice — lowercase, deadpan, warm ---------------- */
   D.VOICE = {
+    school: {
+      stalk: ['dee teaches tonight: match their pace. stay behind. let it get unbearable.',
+        '“they can feel a person behind them. that’s the whole trick.” — dee, entirely'],
+      creep: ['grace teaches tonight: slow is scary. hurry is a guy in a costume.'],
+      scarecrow: ['priya teaches tonight: people ignore furniture. be furniture. then don’t be.'],
+      chainsaw: ['marcus teaches tonight: rev LOW. by the legs. held high it’s a leaf blower.'],
+      slider: ['tater teaches tonight, insufferably: knee-plates. runway. in at their feet.']
+    },
+    tech: {
+      charged: ['it’s unbearable back there. spring it.', 'they keep looking over their shoulders. now.'],
+      sawHigh: ['rev LOW. knees. we talked about this.', 'held high. a dad just said “weed whacker.”'],
+      noRunway: ['you need a runway for that.', 'sliders sprint. that was a stroll.'],
+      locked: ['scare school hasn’t covered that one yet.']
+    },
     walkboys: ['copy.', 'on it.', 'resetting.', 'in position.', 'they’re coming to you.'],
     huh: ['“huh.” — somebody’s dad', '“neat.” — the dad, devastating', '“is that it?” — a teen, lying',
       '“i seen worse at the mall.” — a man who has not', '“that’s good craftsmanship.” — the dad, appraising the panel'],

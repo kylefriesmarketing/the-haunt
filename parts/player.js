@@ -4,7 +4,7 @@
   const H = g.HAUNT;
   const P = {
     x: 4, y: 1.62, z: 14, yaw: Math.PI / 2, pitch: 0,
-    speed: 3.6, sprint: 5.6,
+    speed: 3.6, sprint: 5.6,        // fallbacks only — D.PLAYER is the authority (trap 2)
     keys: {}, locked: false, enabled: false,
     walls: null, freeRoam: false,
     actor: 'you'                      // which performer this client IS (co-op seats get their own id)
@@ -33,7 +33,9 @@
       P.pitch = Math.max(-1.45, Math.min(1.45, P.pitch));
     });
     addEventListener('keydown', e => { P.keys[e.code] = true; if (H.Game && H.Game.onKey) H.Game.onKey(e.code, e); });
-    addEventListener('keyup', e => { P.keys[e.code] = false; });
+    addEventListener('keyup', e => { P.keys[e.code] = false; if (H.Game && H.Game.onKeyUp) H.Game.onKeyUp(e.code); });
+    /* ⚠️ alt-tabbing away with E held would leave the saw revving into its own cooldown */
+    addEventListener('blur', () => { P.keys = {}; if (H.Game && H.Game.onKeyUp) H.Game.onKeyUp('KeyE'); });
   };
 
   P.spawnBackstage = function () { P.x = 4; P.z = 14; P.y = 1.62; P.yaw = -Math.PI / 2; P.pitch = 0; };
@@ -45,7 +47,13 @@
     if (!P.enabled) return;
     const fwd = (P.keys.KeyW ? 1 : 0) - (P.keys.KeyS ? 1 : 0);
     const str = (P.keys.KeyD ? 1 : 0) - (P.keys.KeyA ? 1 : 0);
-    let sp = (P.keys.ShiftLeft || P.keys.ShiftRight) ? P.sprint : P.speed;
+    /* ⚠️ THE CREEP IS A MECHANIC, NOT A COMFORT. The stalk demands you match guest pace
+       (1.15 m/s) and the creep demands you stay under 1.3 — a player who can only walk 3.6
+       or sprint 5.6 can never satisfy either, and two of the six trade verbs would be
+       unreachable decoration. Hold Ctrl. */
+    const PL = (H.DATA && H.DATA.PLAYER) || { walk: P.speed, sprint: P.sprint, creep: 1.05 };
+    const creeping = !!(P.keys.ControlLeft || P.keys.ControlRight);
+    let sp = (P.keys.ShiftLeft || P.keys.ShiftRight) ? PL.sprint : creeping ? PL.creep : PL.walk;
     if (fwd || str) {
       const sy = Math.sin(P.yaw), cy = Math.cos(P.yaw);
       let dx = (-sy * fwd + cy * str), dz = (-cy * fwd - sy * str);
@@ -72,6 +80,36 @@
         if (near(p.x, p.z, 7.5)) return { kind: 'rescue', id: gst.id, label: 'E — walk them out the quiet door (bo taught you the voice)' };
       }
     }
+    /* the trade verbs. Read uniformly off `night.actors` — which works on the real night AND on
+       a co-op guest's shadow, because applySnap decodes the wire's `ac` block into the same
+       {tech, charge, hold} shape. Guests render snapshots; they never predict. */
+    const a = (night && night.actors && night.actors[P.actor]) || null;
+    const tech = a && D.TECHNIQUES.find(t => t.key === a.tech);
+    if (night && a && tech && tech.key !== 'pop') {
+      const inRange = (r) => {
+        for (const gst of night.guests) {
+          if (gst.out || gst.chicken) continue;
+          const p = night.guestPos(gst);
+          if (near(p.x, p.z, r)) return true;
+        }
+        return false;
+      };
+      const cool = night.t < ((night.bodyReadyAt || {})[P.actor + ':' + tech.key] || 0);
+      if (tech.kind === 'hold' && !cool && inRange(tech.nearM)) {
+        return { kind: 'saw', label: P.pitch <= tech.lowPitch
+          ? 'HOLD E — rev low, walk them forward'
+          : 'HOLD E — and AIM DOWN. knees.' };
+      }
+      if (tech.kind === 'charge' && !cool && a.charge / tech.chargeMax >= D.TECH.fireMinFrac && inRange(tech.behindM || tech.nearM)) {
+        return { kind: 'tech', label: `E — spring the ${tech.name.replace('the ', '')} (${Math.round(100 * a.charge / tech.chargeMax)}%)` };
+      }
+      if (tech.needSprint && !cool && inRange(tech.nearM)) {
+        const ready = a.sprintReady === undefined ? true : !!a.sprintReady;
+        return ready
+          ? { kind: 'tech', label: 'E — SLIDE. take the whole row.' }
+          : { kind: 'peekinfo', label: 'the slider needs a running start (SPRINT first)' };
+      }
+    }
     // stations
     for (const slot of D.SLOTS) {
       const b = buildSlots[slot.id];
@@ -87,7 +125,9 @@
     // peek doors (body scare)
     for (const p of D.DOORS.peek) {
       if (near(p.x, p.z, 1.9)) {
-        const ready = !night || night.t >= (night.bodyReadyAt[P.actor] || 0);
+        if (a && a.tech && a.tech !== 'pop')
+          return { kind: 'peekinfo', label: 'the curtain wants the pop — press 1' };
+        const ready = !night || night.t >= ((night.bodyReadyAt || {})[P.actor + ':pop'] || 0);
         return { kind: 'peek', id: p.id, label: ready ? 'E — THE POP (through the curtain)' : 'catching your breath…', ready };
       }
     }

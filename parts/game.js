@@ -11,7 +11,8 @@
     quietT: 0, saidLate: false, saidLast: false, chickenSeen: 0, replay: null, stingData: null,
     wantLock: false, lockAt: 0,
     /* co-op (M6): shadow = a guest's read-only stand-in for the host's night */
-    shadow: null, deltas: {}, crew: [], crewPos: {}, snapT: 0, posT: 0, mpSlots: null, mpName: ''
+    shadow: null, deltas: {}, crew: [], crewPos: {}, snapT: 0, posT: 0, mpSlots: null, mpName: '',
+    shadowTechs: null, _sawOn: false, _sawLow: false, _band: -1
   };
 
   /* ---------------- save ---------------- */
@@ -25,7 +26,7 @@
       noteOwed: 0, notePaidAll: true, paymentsDone: 0,
       nights: 0, seasonGuests: 0, dropped: 0, melted: 0, delight: 0, polaroids: [],
       bounty: false, ghostArmed: true, ghostSeen: 0, endings: {}, endless: 0,
-      marshalFails: 0, seasonSeed: 7411, softNext: false,
+      marshalFails: 0, seasonSeed: 7411, softNext: false, schoolSeen: {},
       settings: { muted: false, strobeOff: false, reducedMotion: false }
     };
   }
@@ -70,6 +71,7 @@
     if (GAME.state === 'night' && GAME.night) {
       /* the barn's owner: the one true sim runs here */
       H.Player.update(dt);
+      feedActors();
       GAME.night.tick(dt);
       drainEvents();
       GAME.deltas = nodeDeltas(GAME.night);
@@ -83,6 +85,8 @@
       H.View.syncCrew(otherCrew());
       H.UI.hudNight(GAME.night, GAME.S);
       H.UI.cooldowns(GAME.night);
+      H.UI.techBar(GAME.night, GAME.night.techsAllowed);
+      techAudio(GAME.night);
       H.UI.prompt(H.Player.context(GAME.night, GAME.S.build.slots));
       H.UI.clickHint(!H.Player.locked);
       if (GAME.night.done) return sting();
@@ -97,6 +101,8 @@
       H.View.syncCrew(otherCrew());
       H.UI.hudNight(GAME.shadow, GAME.S);
       H.UI.cooldowns(GAME.shadow);
+      H.UI.techBar(GAME.shadow, GAME.shadowTechs || []);
+      techAudio(GAME.shadow);
       H.UI.prompt(H.Player.context(GAME.shadow, GAME.mpSlots || {}));
       H.UI.clickHint(!H.Player.locked);
     } else if (GAME.state === 'build3d') {
@@ -110,6 +116,45 @@
     }
     H.View.update(GAME.night || GAME.shadow, H.Player, GAME.S ? GAME.S.build.slots : {}, dt, GAME.deltas);
   };
+
+  /* Every performer's body, handed to the sim as an INPUT. Note what is NOT sent: speed.
+     The sim derives it from the accepted step on its own 30 Hz clock, so the host and every
+     guest measure one number the same way — and a seat cannot simply assert that it is
+     sprinting, or standing inside a group. */
+  /* the charge, by ear. One blip per band CROSSING and a saw that idles while it is held —
+     so a player can run the whole trade without looking down at a meter. Works on a co-op
+     guest too: the shadow's actors come off the wire in the same shape. */
+  function techAudio(N) {
+    const a = N && N.actors && N.actors[H.Player.actor];
+    const saw = D().TECHNIQUES.find(t => t.key === 'chainsaw');
+    const holding = !!(a && a.hold);
+    const low = H.Player.pitch <= saw.lowPitch;
+    if (holding !== GAME._sawOn || (holding && low !== GAME._sawLow)) {
+      GAME._sawOn = holding; GAME._sawLow = low;
+      H.Audio.saw(holding, low);
+    }
+    let band = -1;
+    if (a) {
+      const T = D().TECHNIQUES.find(t => t.key === a.tech);
+      if (T && T.kind === 'charge' && a.charge > 0) band = D().TECH_BANDS.findIndex(b => a.charge / T.chargeMax >= b.at);
+    }
+    // TECH_BANDS runs best-first, so RIPENING means the index falls
+    if (band !== GAME._band) {
+      if (band >= 0 && GAME._band > band) H.Audio.bandUp(band);
+      GAME._band = band;
+    }
+  }
+
+  function feedActors() {
+    const N = GAME.night; if (!N) return;
+    const B = D().BARN, P = H.Player;
+    const inRoom = (x, z) => x > B.x0 && x < B.x1 && z > B.z0 && z < B.z1 && !H.Barn.inSpine(x, z);
+    N.setActor(P.actor, { x: P.x, z: P.z, inRoom: inRoom(P.x, P.z), pitch: P.pitch });
+    for (const seat of Object.keys(GAME.crewPos)) {
+      const p = GAME.crewPos[seat];
+      N.setActor(H.Net.actorOf(+seat), { x: p.x, z: p.z, inRoom: inRoom(p.x, p.z), pitch: p.pt || 0 });
+    }
+  }
 
   /* the crowd you hear through the wall — and the DIP that means they're nearly on you (bible §6.1) */
   function crowdAudio(dt, N) {
@@ -165,7 +210,7 @@
     GAME.posT -= dt;
     if (GAME.posT > 0) return;
     GAME.posT = 1 / D().NET.posHz;
-    H.Net.pos(H.Player.x, H.Player.z, H.Player.yaw);
+    H.Net.pos(H.Player.x, H.Player.z, H.Player.yaw, H.Player.pitch);
   }
 
   /* a guest's stand-in for the night: enough shape that the HUD, the prompt and the
@@ -176,7 +221,7 @@
       t: 0, done: false, nightDef: nd, softScare: !!start.softScare,
       guests: [], stations: {}, drawer: 0, spawned: 0, _clock: '7:00 pm',
       tally: { flinch: 0, scream: 0, gotem: 0, dropped: 0, melted: 0, walkby: 0, complaints: 0, rescues: 0, chickened: 0, delight: 0, polaroids: 0, bounty: false, ghost: 0, conga: 0, alarms: 0 },
-      alarm: { active: false }, bodyReadyAt: {}, comedyReadyAt: {},
+      alarm: { active: false }, bodyReadyAt: {}, comedyReadyAt: {}, actors: {},
       guestPos(gst) { return { x: gst.x, z: gst.z, dirX: 0, dirZ: 1 }; },
       clock() { return sh._clock; }
     };
@@ -192,6 +237,7 @@
     sh.alarm.active = !!snap.al; sh.bodyReadyAt = snap.bd || {}; sh.comedyReadyAt = snap.cd || {};
     sh._clock = snap.ck || sh._clock;
     sh.guests = H.Net.readGuests(snap);
+    sh.actors = H.Net.readActors(snap, sh.t);   // this is how a guest sees their OWN charge
     for (const id of Object.keys(sh.stations)) sh.stations[id].readyAt = sh.t + (snap.st[id] || 0);
     GAME.deltas = snap.nd || {};
     GAME.crew = snap.crew || [];
@@ -207,18 +253,22 @@
       else if (GAME.night && !GAME.night.done) {
         H.Net.toSeat(msg.seat, {
           t: 'start', nightIdx: GAME.S.nightIdx, slots: GAME.S.build.slots,
-          softScare: !!GAME.S.softNext, label: GAME.night.nightDef.label
+          softScare: !!GAME.S.softNext, label: GAME.night.nightDef.label, techs: GAME.night.techsAllowed
         });
       }
     }
-    else if (type === 'leave') { H.UI.toast(`${msg.name} left.`); delete GAME.crewPos[msg.seat]; if (GAME.state === 'mplobby') mpLobbyScreen(); }
+    else if (type === 'leave') {
+      H.UI.toast(`${msg.name} left.`); delete GAME.crewPos[msg.seat];
+      if (GAME.night) GAME.night.dropActor(H.Net.actorOf(msg.seat));   // never leave a ghost saw running
+      if (GAME.state === 'mplobby') mpLobbyScreen();
+    }
     else if (type === 'roster') { if (GAME.state === 'mplobby') mpLobbyScreen(); }
     else if (type === 'seat') { H.Player.actor = H.Net.actorOf(msg.seat); if (GAME.state === 'mplobby') mpLobbyScreen(); }
     else if (type === 'full') { H.UI.toast('that barn is full. four monsters is the fire code.'); }
     else if (type === 'cmd') hostApplyCmd(msg.seat, msg.c);
     else if (type === 'pos') {
       const r = H.Net.roster.find(x => x.seat === msg.seat);
-      GAME.crewPos[msg.seat] = { x: msg.x, z: msg.z, yaw: msg.yaw, name: r ? r.name : 'a monster' };
+      GAME.crewPos[msg.seat] = { x: msg.x, z: msg.z, yaw: msg.yaw, pt: +msg.pt || 0, name: r ? r.name : 'a monster' };
     }
     else if (type === 'start') guestStart(msg);
     else if (type === 'snap') applySnap(msg);
@@ -253,6 +303,12 @@
       N.triggerComedy(who);
     } else if (c.k === 'rescue') {
       N.rescue(c.id);
+    } else if (c.k === 'tech') {
+      N.setTechnique(who, String(c.key || ''));   // refuses junk AND anything scare school hasn't covered
+    } else if (c.k === 'fire') {
+      N.triggerTech(who);                          // the host recomputes the target from ITS actor state
+    } else if (c.k === 'hold') {
+      if (c.on) N.holdStart(who); else N.holdEnd(who);
     }
   }
 
@@ -261,6 +317,17 @@
     H.View.leverHand(); H.Audio.lever();
     if (GAME.night) GAME.night.triggerStation(id, false, H.Player.actor);
     else H.Net.cmd({ k: 'station', id });
+  }
+  function doTech() {
+    const r = GAME.night ? GAME.night.triggerTech(H.Player.actor) : (H.Net.cmd({ k: 'fire' }), null);
+    if (r && r.needSprint) return H.UI.toast(rnd(D().VOICE.tech.noRunway));
+    H.View.popHands();
+    if (r && r.grade && r.grade.id !== 'miss') { const a = GAME.night.actors[H.Player.actor]; if (a && a.tech === 'slider') H.Audio.slide(); }
+  }
+  function doHold(on) {
+    if (GAME.night) { if (on) GAME.night.holdStart(H.Player.actor); else GAME.night.holdEnd(H.Player.actor); }
+    else H.Net.cmd({ k: 'hold', on: on ? 1 : 0 });
+    if (on) H.View.popHands();
   }
   function doBody(peekId) {
     H.Audio.pop(); H.Audio.cloth(); H.View.popHands(peekId);
@@ -386,7 +453,7 @@
         case 'grade': {
           const mine = !ev.who || ev.who === H.Player.actor;
           if (mine) { H.UI.grade(ev.label, ev.id); if (!ev.byCrew) H.Audio.grade(ev.id); }
-          else if (ev.id === 'perfect') walkieSay(`${H.Net.nameOf(ev.who)} hit it on the beat.`);
+          else if (ev.id === 'perfect') walkieSay(ev.tech ? rnd(D().VOICE.tech.charged) : `${H.Net.nameOf(ev.who)} hit it on the beat.`);
           if (ev.id === 'perfect') {
             GAME.perfectRun++; GAME.walkbyRun = 0;
             if (GAME.perfectRun === 3) walkieSay(rnd(V.streak), true);
@@ -424,6 +491,7 @@
         case 'conga': walkieSay(rnd(V.conga), true); break;
         case 'alarm': H.Audio.alarm(true); walkieSay(rnd(V.alarm), true); H.UI.toast('THE ALARM. lights up. fog dead. breathe. reset the season’s pride tomorrow.'); break;
         case 'alarmOver': H.Audio.alarm(false); walkieSay('alarm reset. the dark comes back on slow.', true); break;
+        case 'chainsawHigh': walkieSay(rnd(V.tech.sawHigh), true); break;
         case 'ghost': H.Audio.ghost(); H.View.fx(ev); setTimeout(() => walkieSay(rnd(V.ghost), true), 1600); break;
         case 'spawn':
           if (Math.random() < 0.3) H.Audio.doorCreak();
@@ -488,6 +556,9 @@
   }
 
   function seasonHub() {
+    /* scare school: the season finally TEACHES the trade instead of silently unlocking it. */
+    const due = D().TECHNIQUES.find(t => t.unlock > 0 && t.unlock <= GAME.S.nightIdx && !(GAME.S.schoolSeen || {})[t.key]);
+    if (due) return schoolBeat(due);
     GAME.state = 'season';
     H.UI.showHud(false); H.Player.enabled = false;
     const s = GAME.S;
@@ -686,7 +757,7 @@
     H.View.setBuildMode(false, GAME.S.build.slots);
     H.View.setDaylight(false);
     H.UI.buildBar(null); H.UI.panel(null); H.UI.showHud(false); H.UI.prompt(null);
-    H.UI.keysHelp('wasd move · shift run · mouse look · E act · Q the comedy beat · esc menu');
+    H.UI.keysHelp('wasd move · shift run · CTRL creep · 1-6 the trade · E act · Q comedy beat · esc menu');
     H.Player.enabled = false;
     dropLock();
   }
@@ -929,6 +1000,7 @@
 
   function guestStart(msg) {
     GAME.mpSlots = msg.slots || {};
+    GAME.shadowTechs = msg.techs || D().TECHNIQUES.filter(t => t.unlock <= (msg.nightIdx || 0)).map(t => t.key);
     GAME.shadow = makeShadow(msg);
     GAME.night = null;
     GAME.crewPos = {}; GAME.crew = []; GAME.deltas = {};
@@ -940,7 +1012,7 @@
     H.View.syncStations(GAME.mpSlots);
     H.View.handsIdle();
     H.UI.buildBar(null);
-    H.UI.keysHelp('wasd move · shift run · mouse look · E act · Q the comedy beat · esc menu');
+    H.UI.keysHelp('wasd move · shift run · CTRL creep · 1-6 the trade · E act · Q comedy beat · esc menu');
     H.UI.screen(null); H.UI.showHud(true);
     H.Player.enabled = true; H.Player.spawnBackstage();
     H.Audio.startNightBed();
@@ -1049,7 +1121,7 @@
       H.Player.actor = H.Net.actorOf(0);
       H.Net.broadcast({
         t: 'start', nightIdx: s.nightIdx, slots: s.build.slots,
-        softScare: !!s.softNext, label: nd.label
+        softScare: !!s.softNext, label: nd.label, techs: GAME.night.techsAllowed
       });
     }
     H.View.setBuildMode(false, s.build.slots);
@@ -1057,7 +1129,7 @@
     H.View.syncStations(s.build.slots);
     H.View.handsIdle();
     H.UI.buildBar(null);
-    H.UI.keysHelp('wasd move · shift run · mouse look · E act · Q the comedy beat · esc menu');
+    H.UI.keysHelp('wasd move · shift run · CTRL creep · 1-6 the trade · E act · Q comedy beat · esc menu');
     H.UI.screen(null); H.UI.showHud(true);
     H.Player.enabled = true; H.Player.spawnBackstage();
     H.Audio.startNightBed();
@@ -1072,12 +1144,28 @@
     if (GAME.state === 'night') {
       const N = GAME.night || GAME.shadow;
       if (!N) return;
+      if (e && e.repeat) return;                     // holding E must not machine-gun keydowns
+      if (/^Digit[1-6]$/.test(code)) {
+        const i = +code.slice(5) - 1, t = D().TECHNIQUES[i];
+        if (!t) return;
+        const allowed = (GAME.night ? GAME.night.techsAllowed : (GAME.shadowTechs || [])).includes(t.key);
+        if (!allowed) {
+          H.UI.toast(rnd(D().VOICE.tech.locked) + ' (' + t.name + ' — night ' + t.unlock + ')');
+          H.UI.techShake(i); return;
+        }
+        if (GAME.night) GAME.night.setTechnique(H.Player.actor, t.key);
+        else H.Net.cmd({ k: 'tech', key: t.key });
+        H.Audio.lever();
+        return;
+      }
       if (code === 'KeyE') {
         const ctx = H.Player.context(N, GAME.night ? GAME.S.build.slots : (GAME.mpSlots || {}));
         if (!ctx) return;
-        if (ctx.kind === 'station' && !ctx.cool && !ctx.broken) doStation(ctx.id);
+        if (ctx.kind === 'rescue') doRescue(ctx.id);
+        else if (ctx.kind === 'saw') doHold(true);
+        else if (ctx.kind === 'tech') doTech();
+        else if (ctx.kind === 'station' && !ctx.cool && !ctx.broken) doStation(ctx.id);
         else if (ctx.kind === 'peek' && ctx.ready) doBody(ctx.id);
-        else if (ctx.kind === 'rescue') doRescue(ctx.id);
       } else if (code === 'KeyQ') {
         doComedy();
       } else if (code === 'Escape') {
@@ -1095,6 +1183,11 @@
       else if (code === 'Enter' || code === 'NumpadEnter') { leaveBuildWalk(); castCall(); }
       else if (code === 'Escape') buildMenuPanel();
     } else if (GAME.state === 'freeroam' && code === 'Escape') seasonHub();
+  };
+  /* the saw stops when you let go — and also if the window loses focus mid-rev, or a held key
+     would keep drinking the cooldown with nobody at the wheel. */
+  GAME.onKeyUp = function (code) {
+    if (code === 'KeyE' && GAME.state === 'night') doHold(false);
   };
   GAME.onLockChange = function (locked) {
     if (locked) return;
@@ -1127,6 +1220,24 @@
       H.UI.toast('night abandoned. the town is confused but forgiving. once.');
       seasonHub();
     });
+  }
+
+  function schoolBeat(t) {
+    GAME.state = 'school';
+    H.UI.showHud(false); H.Player.enabled = false;
+    const coach = D().CREW.find(c => c.id === t.coach) || { name: 'somebody' };
+    if (!GAME.S.schoolSeen) GAME.S.schoolSeen = {};
+    GAME.S.schoolSeen[t.key] = 1; save();
+    const i = D().TECHNIQUES.indexOf(t) + 1;
+    H.UI.screen(
+      '<h1 style="font-size:24px">scare school</h1>' +
+      '<h2>' + coach.name + ' stays after close · ' + t.name + '</h2>' +
+      '<p style="font-size:34px;text-align:center;letter-spacing:8px">' + t.icon + '</p>' +
+      '<p><b>' + t.desc + '</b></p><p>' + t.how + '</p>' +
+      '<p style="color:#8a7a58">' + rnd(D().VOICE.school[t.key] || ['']) + '</p>' +
+      '<p class="warn">press ' + i + ' in the walls to take it out tonight.</p>' +
+      '<button class="btn primary" id="btnSchoolOk">got it. probably.</button>');
+    H.UI.on('btnSchoolOk', seasonHub);
   }
 
   /* ---------------- the sting ---------------- */

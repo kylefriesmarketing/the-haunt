@@ -37,6 +37,24 @@
   #flashWhite{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none}
   #cooldowns{position:absolute;right:18px;bottom:70px;font-size:11px;color:#b8a070;text-align:right;text-shadow:0 1px 3px #000}
   #keysHelp{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);font-size:11px;letter-spacing:1px;color:#887650;text-shadow:0 1px 3px #000}
+  #techBar{position:absolute;left:50%;bottom:40px;transform:translateX(-50%);display:none;gap:6px}
+  .tk{width:46px;height:52px;border:1px solid #4a3820;border-radius:6px;background:rgba(14,10,6,.82);
+    text-align:center;color:#b8a070;position:relative;font-size:10px;line-height:1.15;overflow:hidden}
+  .tk .ic{font-size:17px;display:block;margin-top:5px;color:#e8dcc0}
+  .tk .n{position:absolute;top:1px;left:4px;font-size:9px;color:#8a7648}
+  .tk.sel{border-color:#c89a3a;background:rgba(58,38,14,.9);box-shadow:0 0 12px rgba(255,180,60,.25)}
+  .tk.locked{opacity:.32}.tk.locked .ic{filter:grayscale(1)}
+  .tk .cd{position:absolute;inset:auto 0 0 0;background:rgba(20,12,6,.78);color:#e8b23a;font-size:9px}
+  .tk.shake{animation:tkshake .3s}
+  @keyframes tkshake{25%{transform:translateX(-3px)}75%{transform:translateX(3px)}}
+  #chargeWrap{position:absolute;left:50%;bottom:104px;transform:translateX(-50%);width:154px;display:none;text-align:center}
+  #chargeTrack{height:8px;border-radius:3px;background:rgba(20,14,8,.8);border:1px solid #3e3018;overflow:hidden}
+  /* ⚠️ scaleX, never width: this is written every frame, and width forces style+layout on the
+     HUD overlay on top of the 3D scene. transform is compositor-only. No transition either —
+     a 0.1s transition restarted 60 times a second never lands, it just stutters. */
+  #chargeFill{height:100%;width:100%;transform:scaleX(0);transform-origin:left;background:#7a6236}
+  #chargeLabel{font-size:11px;letter-spacing:2px;color:#d8c08a;text-shadow:0 1px 3px #000;margin-top:3px}
+
   #clickHint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:none;text-align:center;
     font-size:16px;letter-spacing:3px;color:#ffe9b0;background:rgba(12,8,4,.82);border:1px solid #6a5028;
     border-radius:8px;padding:14px 26px;text-shadow:0 1px 4px #000}
@@ -104,8 +122,10 @@
         <div id="hudTop"></div><div id="hudNight"></div><div id="hudDrawer"></div>
         <div id="walkie"></div><div id="prompt"></div><div id="gradeFlash"></div>
         <div id="crosshair"></div><div id="cooldowns"></div>
+        <div id="techBar"></div>
+        <div id="chargeWrap"><div id="chargeTrack"><div id="chargeFill"></div></div><div id="chargeLabel"></div></div>
         <div id="clickHint">click to look around<small>wasd moves you either way · E acts · esc for the menu</small></div>
-        <div id="keysHelp">wasd move · shift run · mouse look · E act · Q the comedy beat · esc menu</div>
+        <div id="keysHelp">wasd move · shift run · CTRL creep · 1-6 the trade · E act · Q comedy beat · esc menu</div>
       </div>
       <div id="buildBar"></div>
       <div id="vignette"></div><div id="flashWhite"></div><div id="toast"></div>
@@ -117,7 +137,10 @@
       <div id="panelWrap"><div class="panel" id="panelCard"></div></div>
       <div id="veil"><div id="veilCard"></div></div>
       <div id="screen" class="full" style="display:none"><div class="panel card" id="screenCard"></div></div>`;
+    /* ⚠️ this list is an explicit WHITELIST — a new id that is not in it stays undefined on
+       U.els, and the first frame that touches it throws inside GAME.step and kills the loop. */
     ['hud', 'hudTop', 'hudNight', 'hudDrawer', 'walkie', 'prompt', 'gradeFlash', 'cooldowns', 'screen', 'screenCard',
+      'techBar', 'chargeWrap', 'chargeTrack', 'chargeFill', 'chargeLabel',
       'flashWhite', 'toast', 'buildBar', 'panelWrap', 'panelCard', 'vhs', 'vhsGrain', 'vhsBand', 'vhsTime', 'vhsBottom', 'vhsRec',
       'veil', 'veilCard']
       .forEach(id => U.els[id] = document.getElementById(id));
@@ -256,14 +279,70 @@
       : inWin ? '0 0 10px 3px rgba(255,233,176,.8)' : u01 > 0.4 ? '0 0 6px 1px rgba(255,207,90,.4)' : 'none';
   };
 
+  /* the technique bar owns every trade cooldown now; this corner keeps the comedy beat. */
   U.cooldowns = (night) => {
     if (!night) { U.els.cooldowns.innerHTML = ''; return; }
     const me = H.Player.actor;
-    const body = Math.max(0, (night.bodyReadyAt[me] || 0) - night.t);
-    const com = Math.max(0, (night.comedyReadyAt[me] || 0) - night.t);
-    U.els.cooldowns.innerHTML =
-      (body > 0 ? `the pop: ${body.toFixed(0)}s<br>` : `the pop: <span class="good">ready</span><br>`) +
-      (com > 0 ? `comedy beat: ${com.toFixed(0)}s` : `comedy beat: <span class="good">ready</span>`);
+    const com = Math.max(0, ((night.comedyReadyAt || {})[me] || 0) - night.t);
+    const txt = com > 0 ? `comedy beat: ${com.toFixed(0)}s` : `comedy beat: <span class="good">ready</span>`;
+    if (U.els.cooldowns.innerHTML !== txt) U.els.cooldowns.innerHTML = txt;
+  };
+
+  /* ---------- the trade: six slots, one charge meter ----------
+     House stable-DOM culture: the slots are built ONCE and only their text and classes move.
+     Rebuilding buttons on a ticker is how clicks get eaten. */
+  U.techBar = function (night, allowed) {
+    const bar = U.els.techBar; if (!bar) return;
+    if (!night) { bar.style.display = 'none'; U.els.chargeWrap.style.display = 'none'; return; }
+    const T = H.DATA.TECHNIQUES, me = H.Player.actor;
+    const a = (night.actors && night.actors[me]) || null;
+    if (!bar._slots) {
+      bar._slots = [];
+      T.forEach((t, i) => {
+        const d = document.createElement('div'); d.className = 'tk';
+        d.innerHTML = `<span class="n">${i + 1}</span><span class="ic">${t.icon}</span>${t.name.replace('the ', '')}<div class="cd"></div>`;
+        bar.appendChild(d); bar._slots.push(d);
+      });
+    }
+    /* ⚠️ set every call, never once on build: #hud is hidden and shown around menus, the tape
+       and build day, and a display latched at build time never comes back. */
+    bar.style.display = 'flex';
+    const allow = allowed || [];
+    for (let i = 0; i < T.length; i++) {
+      const t = T[i], d = bar._slots[i];
+      const locked = !allow.includes(t.key);
+      const cd = Math.max(0, ((night.bodyReadyAt || {})[me + ':' + t.key] || 0) - night.t);
+      d.classList.toggle('locked', locked);
+      d.classList.toggle('sel', !!a && a.tech === t.key);
+      const cdEl = d.lastElementChild;
+      const txt = locked ? 'night ' + t.unlock : cd > 0 ? cd.toFixed(0) + 's' : '';
+      if (cdEl.textContent !== txt) cdEl.textContent = txt;
+    }
+    const w = U.els.chargeWrap, tech = a && T.find(t => t.key === a.tech);
+    const show = !!(a && tech && ((tech.kind === 'charge' && a.charge > 0.01) || a.hold));
+    if (w._shown !== show) { w._shown = show; w.style.display = show ? 'block' : 'none'; }
+    if (!show) return;
+    let frac, bandId, label;
+    if (a.hold) {
+      frac = Math.max(0, (a.hold.until - night.t) / tech.maxHoldS);
+      bandId = 'saw'; label = 'REV LOW · WALK THEM FORWARD';
+    } else {
+      frac = Math.max(0, Math.min(1, a.charge / tech.chargeMax));
+      const band = H.DATA.TECH_BANDS.find(b => frac >= b.at) || H.DATA.TECH_BANDS[H.DATA.TECH_BANDS.length - 1];
+      bandId = band.id; label = band.label;
+    }
+    U.els.chargeFill.style.transform = 'scaleX(' + frac.toFixed(3) + ')';
+    if (w._band !== bandId) {
+      w._band = bandId;
+      U.els.chargeFill.style.background =
+        bandId === 'saw' ? '#c85a3a' : bandId === 'perfect' ? '#ffe9a0' : bandId === 'good' ? '#c8e8a0' : '#7a6236';
+    }
+    if (U.els.chargeLabel.textContent !== label) U.els.chargeLabel.textContent = label;
+  };
+  U.techShake = i => {
+    const bar = U.els.techBar, d = bar && bar._slots && bar._slots[i];
+    if (!d || (H.View && H.View.reducedMotion)) return;
+    d.classList.remove('shake'); void d.offsetWidth; d.classList.add('shake');
   };
 
   /* ---------- M5: build day, walked ---------- */

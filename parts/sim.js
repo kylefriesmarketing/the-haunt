@@ -87,8 +87,15 @@
          keyed by actor id; 'you' is the local/solo performer. */
       bodyReadyAt: {}, comedyReadyAt: {},
       ghostPlanned: null, lastSpawnT: -999,
-      bestScare: null
+      bestScare: null,
+      /* the performers. Actor kinematics are INPUTS, exactly like triggerStation — same seed
+         plus the same input script is the same night. NOTHING in the technique kernel consumes
+         rng: a charge is pure skill, so an actor who charges all night and never fires must
+         leave the tally byte-identical (test-sim T13 is the guard). */
+      actors: {}
     };
+    const techByKey = {}; data.TECHNIQUES.forEach(t => techByKey[t.key] = t);
+    N.techsAllowed = cfg.techs || data.TECHNIQUES.filter(t => t.unlock <= (cfg.nightIdx || 0)).map(t => t.key);
 
     // plan the '96 moment (iron rules: slow nights only, once, kind, unexplained)
     if (cfg.seasonFlags && cfg.seasonFlags.ghostArmed &&
@@ -133,29 +140,24 @@
     }
 
     /* ---- scare resolution ---- */
-    function applyScare(node, source, powerBase, gradeMult, opts) {
-      opts = opts || {};
-      const group = groupInWindow(node);
-      if (!group) { N.emit('scareMiss', { node: node.id, source }); return null; }
-      const behind = opts.fromBehind !== false; // our nodes are authored to hit from cover
-      const distracted = N.t < group.distractedUntil;
-      const primeMult = 1 + group.prime / 180;
-      const congaMult = group.guests.length > 10 ? D().GUEST.congaResist : 1;
-      let magnitudeSum = 0, dropped = 0, melted = 0, gotem = 0, screams = 0, flinches = 0;
-      for (const gst of group.guests) {
-        if (gst.out || gst.state === 'distress' || gst.state === 'chicken') continue;
+    /* ONE place a scare becomes nerve loss. Stations, the pop, every technique and the
+       chainsaw's per-tick drain all pass through here — which is what makes the soft-scare,
+       immune, spent and angry clamps impossible to route around by adding a new verb.
+       `floor` is the minimum a DISCRETE hit lands (1). A continuous drain passes 0: at 30 Hz
+       a floor of 1 would deal 30/s to exactly the guests the clamps exist to protect. */
+    function hitGuest(gst, group, pwIn, gradeMult, c, nodeId, floor) {
+      {
         const arch = D().ARCHETYPES[gst.arch];
-        let pw = powerBase * gradeMult * primeMult * congaMult * (arch.resist);
-        pw *= (behind || distracted) ? D().GUEST.behindMult : D().GUEST.frontMult;
+        let pw = pwIn;
         pw *= Math.pow(0.72, gst.hits || 0);            // habituation: the same guest startles less each time
         if (gst.spent) pw = Math.min(pw, 4);            // they already dropped tonight. they're riding the high.
         if (gst.angry) pw = 1;                          // complained. arms crossed. done.
         if (N.softScare || arch.soft) pw = Math.min(pw, gst.nerve - gst.pool * 0.35); // soft mode: never below comfy
         if (arch.immune) pw = Math.min(pw, 2);
-        if (pw <= 0) pw = 1;
+        if (pw <= 0) { if (floor === 0) return; pw = 1; }
         const before = gst.nerve / gst.pool;
         gst.nerve = Math.max(gst.nerve - pw, -0.4 * gst.pool);
-        magnitudeSum += pw;
+        c.magnitudeSum += pw;
         const after = gst.nerve / gst.pool;
         gst.lowest = Math.min(gst.lowest, after);
         const R = D().REACT;
@@ -171,39 +173,72 @@
           gst.delightPend += pw * D().GUEST.delightConvert * arch.delightM;
           if (kind) gst.hits = (gst.hits || 0) + 1;
           if (kind === 'dropped') {
-            dropped++; N.tally.dropped++; gst.spent = true;
+            c.dropped++; N.tally.dropped++; gst.spent = true;
             group.prime = Math.min(100, group.prime + D().GUEST.primeOnDrop);
-            if (gradeMult >= 1.35 && gst.nerve < gst.pool * R.dropped - 24 && !arch.soft) { gst.reactKind = 'melt'; gst.reactT = D().POSE.durs.melt; melted++; N.tally.melted++; }
-          } else if (kind === 'gotem') { gotem++; N.tally.gotem++; group.prime = Math.min(100, group.prime + D().GUEST.primeOnScream); }
-          else if (kind === 'scream') { screams++; N.tally.scream++; group.prime = Math.min(100, group.prime + D().GUEST.primeOnScream); }
-          else { flinches++; N.tally.flinch++; }
+            if (gradeMult >= 1.35 && gst.nerve < gst.pool * R.dropped - 24 && !arch.soft) { gst.reactKind = 'melt'; gst.reactT = D().POSE.durs.melt; c.melted++; N.tally.melted++; }
+          } else if (kind === 'gotem') { c.gotem++; N.tally.gotem++; group.prime = Math.min(100, group.prime + D().GUEST.primeOnScream); }
+          else if (kind === 'scream') { c.screams++; N.tally.scream++; group.prime = Math.min(100, group.prime + D().GUEST.primeOnScream); }
+          else { c.flinches++; N.tally.flinch++; }
           if (arch.loudBreak && (kind === 'scream' || kind === 'gotem' || kind === 'dropped')) N.emit('loudBreak', { guest: gst.id });
           if (arch.huh && kind === 'flinch') N.emit('huh', { guest: gst.id });
         }
         // distress check: a too-hard single hit on someone already deep. rare by design. never soft, never grandma, never twice.
         if (!N.softScare && !arch.immune && !gst.spent && !gst.angry && pw >= 40 && gst.nerve < D().GUEST.distressAt * gst.pool) {
           gst.state = 'distress'; gst.distressT = D().GUEST.distressGraceS;
-          N.emit('distress', { guest: gst.id, node: node.id });
+          N.emit('distress', { guest: gst.id, node: nodeId });
         }
       }
+    }
+
+    /* the group-direct resolution. `applyScare` (node + beat window) is now a thin wrapper on it,
+       so a technique fired mid-room and a station fired on the beat resolve through one body. */
+    function applyScareToGroup(group, source, powerBase, gradeMult, opts) {
+      opts = opts || {};
+      const behind = opts.fromBehind !== false; // our nodes are authored to hit from cover
+      const distracted = N.t < group.distractedUntil;
+      const primeMult = 1 + group.prime / 180;
+      const congaMult = group.guests.length > 10 ? D().GUEST.congaResist : 1;
+      const nodeId = opts.node ? opts.node.id : nearestNodeId(group);
+      const c = { magnitudeSum: 0, dropped: 0, melted: 0, gotem: 0, screams: 0, flinches: 0 };
+      for (const gst of group.guests) {
+        if (gst.out || gst.state === 'distress' || gst.state === 'chicken') continue;
+        const arch = D().ARCHETYPES[gst.arch];
+        let pw = powerBase * gradeMult * primeMult * congaMult * (arch.resist);
+        pw *= (behind || distracted) ? D().GUEST.behindMult : D().GUEST.frontMult;
+        hitGuest(gst, group, pw, gradeMult, c, nodeId, 1);
+      }
       // contagion: everyone in a chain group tightens
-      group.prime = Math.min(100, group.prime + D().GUEST.primeContagion * (screams + dropped > 0 ? 1 : 0));
-      const result = { node: node.id, source, dropped, melted, gotem, screams, flinches, magnitude: magnitudeSum, group: group.id, gradeMult };
+      group.prime = Math.min(100, group.prime + D().GUEST.primeContagion * (c.screams + c.dropped > 0 ? 1 : 0));
+      const result = { node: nodeId, source, dropped: c.dropped, melted: c.melted, gotem: c.gotem, screams: c.screams, flinches: c.flinches, magnitude: c.magnitudeSum, group: group.id, gradeMult };
+      if (opts.tech) result.tech = opts.tech;
       N.emit('scare', result);
-      if (!N.bestScare || magnitudeSum > N.bestScare.magnitude) N.bestScare = { ...result, t: N.t };
-      // flash cam capture
-      const flash = Object.values(N.stations).find(st => st.type === 'flashCam' && st.node.id === node.id && !st.broken);
-      if (flash && dropped > 0 && gradeMult >= 1.1) {
+      if (!N.bestScare || result.magnitude > N.bestScare.magnitude) N.bestScare = { ...result, t: N.t };
+      /* flash cam capture. A node fire keeps the EXACT old same-node test; a group-direct fire
+         asks the physically-true question instead: is this group in that camera's own window? */
+      const flash = Object.values(N.stations).find(st => st.type === 'flashCam' && !st.broken &&
+        (opts.node ? st.node.id === opts.node.id : groupInWindow(st.node) === group));
+      if (flash && c.dropped > 0 && gradeMult >= 1.1) {
         N.tally.polaroids++;
-        N.drawer += D().SEASON.photoSale * dropped;
-        N.emit('polaroid', { node: node.id, dropped, group: group.id, size: group.guests.length });
-        if (group.guests.length >= 6 && dropped >= 1) N.emit('polaroidFull', { group: group.id });
+        N.drawer += D().SEASON.photoSale * c.dropped;
+        N.emit('polaroid', { node: nodeId, dropped: c.dropped, group: group.id, size: group.guests.length });
+        if (group.guests.length >= 6 && c.dropped >= 1) N.emit('polaroidFull', { group: group.id });
       }
       // the bounty: melt a flannel guy at PERFECT
-      if (melted > 0 && gradeMult >= 1.4 && !N.tally.bounty && group.guests.some(x => x.arch === 'flannel' && x.reactKind === 'melt')) {
+      if (c.melted > 0 && gradeMult >= 1.4 && !N.tally.bounty && group.guests.some(x => x.arch === 'flannel' && x.reactKind === 'melt')) {
         N.tally.bounty = true; N.drawer -= D().BOUNTY; N.emit('bounty', {});
       }
       return result;
+    }
+    function applyScare(node, source, powerBase, gradeMult, opts) {
+      const group = groupInWindow(node);
+      if (!group) { N.emit('scareMiss', { node: node.id, source }); return null; }
+      return applyScareToGroup(group, source, powerBase, gradeMult, Object.assign({}, opts || {}, { node }));
+    }
+    function nearestNodeId(group) {
+      const l = leaderS(group); let best = nodes[0];
+      if (l === null) return best.id;
+      for (const nd of nodes) if (Math.abs(l - nd.s) < Math.abs(l - best.s)) best = nd;
+      return best.id;
     }
 
     function groupInWindow(node, mult) {
@@ -261,19 +296,229 @@
       for (const grp of N.groups) { if (grp.mergedInto) continue; const l = leaderS(grp); if (l === null) continue; const d = Math.abs(l - node.s); if (d < bd) { bd = d; best = grp; } }
       return best;
     }
+    /* cooldowns are per actor AND per technique: firing the stalk as s0 gates neither s1's
+       stalk nor s0's creep. The wire field name (`bd`) is unchanged — only the keys got richer. */
+    const ready = (who, key) => N.bodyReadyAt[who + ':' + key] || 0;
+    const setReady = (who, key, t) => { N.bodyReadyAt[who + ':' + key] = t; };
     N.triggerBody = function (peekId, who) {
       who = who || 'you';
-      if (N.t < (N.bodyReadyAt[who] || 0) || N.alarm.active) return { ok: false };
+      if (N.t < ready(who, 'pop') || N.alarm.active) return { ok: false };
       const peek = D().DOORS.peek.find(p => p.id === peekId);
       if (!peek) return { ok: false };
-      N.bodyReadyAt[who] = N.t + D().BODY_SCARE.cooldown;
+      setReady(who, 'pop', N.t + techByKey.pop.cooldown);
       const node = nodeById[peek.node];
       const grade = gradeFor(node);
       if (grade.mult === 0) { N.tally.walkby++; N.emit('walkby', { node: node.id, body: true, who }); return { ok: true, grade }; }
-      const res = applyScare(node, who === 'you' ? 'you-body' : 'body:' + who, D().BODY_SCARE.power, grade.mult, { fromBehind: true });
+      const res = applyScare(node, who === 'you' ? 'you-body' : 'body:' + who, techByKey.pop.power, grade.mult, { fromBehind: true });
       N.emit('grade', { label: grade.label, id: grade.id, body: true, who });
       return { ok: true, grade, res };
     };
+    /* ---------------- the trade: the six verbs (bible §6.2) ----------------
+       pop = the beat (triggerBody, unchanged) · stalk/creep/scarecrow = patience (charge)
+       chainsaw = steering (a held drain) · slider = movement (a real sprint runway). */
+
+    N.setActor = function (who, sIn) {
+      const a = N.actors[who] || (N.actors[who] = {
+        x: +sIn.x || 0, z: +sIn.z || 0, wx: +sIn.x || 0, wz: +sIn.z || 0,
+        speed: 0, inRoom: false, pitch: 0,
+        tech: N.techsAllowed[0] || 'pop', charge: 0, sprintT: 0, sprintStopT: -99,
+        hold: null, holdCounts: null, holdHighSaid: false
+      });
+      /* ⚠️ this records the WANTED position, never the accepted one. actorTick rate-limits it
+         to TECH.posSpeedMax on the SIM clock and derives speed from the accepted step. Two
+         reasons, both load-bearing: the host must not trust a position off the wire (a seat
+         could otherwise pose itself inside a group from anywhere), and host and guests have to
+         measure one speed on ONE clock — deriving it from render dt on one side and snapshot
+         arrival on the other makes the same run pass a gate for one seat and fail for another. */
+      a.wx = +sIn.x || 0; a.wz = +sIn.z || 0;
+      a.inRoom = !!sIn.inRoom; a.pitch = +sIn.pitch || 0;
+    };
+    N.setTechnique = function (who, key) {
+      const a = N.actors[who]; if (!a) return { ok: false };
+      if (!techByKey[key] || !N.techsAllowed.includes(key)) return { ok: false, locked: !!techByKey[key] };
+      if (a.tech === key) return { ok: true };
+      if (a.hold) endHold(who, a);          // switching away kills a live hold
+      a.tech = key; a.charge = 0;           // and throws the charge. selection is a commitment.
+      return { ok: true, key };
+    };
+    N.dropActor = function (who) {          // a co-op seat leaves: never leave a ghost saw running
+      const a = N.actors[who]; if (!a) return;
+      if (a.hold) endHold(who, a);
+      delete N.actors[who];
+    };
+
+    function targetGroup(a, rangeM) {       // nearest group, by its nearest live guest
+      let best = null;
+      for (const grp of N.groups) {
+        if (grp.mergedInto) continue;
+        let d = 1e9;
+        for (const gst of grp.guests) {
+          if (gst.out || gst.chicken) continue;
+          const p = N.guestPos(gst);
+          const dd = Math.hypot(p.x - a.x, p.z - a.z);
+          if (dd < d) d = dd;
+        }
+        if (d <= rangeM && (!best || d < best.d)) best = { grp, d };
+      }
+      return best;
+    }
+
+    function actorTick() {
+      const T = D(), B = T.BARN, cap = T.TECH.posSpeedMax * DT;
+      for (const who of Object.keys(N.actors)) {
+        const a = N.actors[who];
+        let tx = Math.max(B.x0, Math.min(B.x1, a.wx)), tz = Math.max(B.z0, Math.min(B.z1, a.wz));
+        const dx = tx - a.x, dz = tz - a.z, d = Math.hypot(dx, dz);
+        if (d > cap) { tx = a.x + dx / d * cap; tz = a.z + dz / d * cap; }
+        a.speed = Math.hypot(tx - a.x, tz - a.z) / DT;
+        a.x = tx; a.z = tz;
+        /* the runway. Derived from the accepted step, never from a 'sprinting' flag a client
+           could simply assert — the slider has to be EARNED by moving. */
+        if (a.speed >= T.TECH.sprintMin) a.sprintT += DT;
+        else { if (a.sprintT > 0) a.sprintStopT = N.t; a.sprintT = 0; }
+        /* ONE definition of "do I have a runway", derived here so the fire gate, the prompt and
+           a co-op guest reading it off the wire can never disagree about the same instant. */
+        const sl = techByKey.slider;
+        a.sprintReady = !!(sl && (a.sprintT >= sl.sprintNeedS || (a.sprintStopT >= 0 && N.t - a.sprintStopT <= sl.sprintGraceS)));
+        const tech = techByKey[a.tech];
+        if (tech && tech.kind === 'charge') {
+          let on = false;
+          if (!N.alarm.active) {                          // fluorescent light breaks every spell
+            const tgt = targetGroup(a, tech.behindM || tech.nearM);
+            if (tgt) {
+              if (a.tech === 'stalk') {
+                const actorS = route.sNear(a.x, a.z);
+                const tail = tailS(tgt.grp);
+                /* ⚠️ tailTolM must stay clear of sNear's 0.5 m sampling lattice, or this gate
+                   chatters on and off as you walk and chops the charge unpredictably. */
+                on = tail !== null && actorS <= tail + T.TECH.tailTolM
+                  && Math.abs(a.speed - T.GUEST.speed) <= tech.paceTol
+                  && a.speed > T.TECH_STILL;
+              } else if (a.tech === 'creep') {
+                on = a.speed > T.TECH_STILL && a.speed <= tech.speedMax;   // slow MOTION. stillness is the scarecrow's job.
+              } else if (a.tech === 'scarecrow') {
+                on = a.inRoom && a.speed <= T.TECH_STILL;                  // dead still, IN the room with them
+              }
+            }
+          }
+          a.charge = on ? Math.min(tech.chargeMax, a.charge + tech.chargeRate * DT)
+                        : Math.max(0, a.charge - tech.decay * DT);
+        }
+        if (a.hold) chainsawTick(who, a);
+      }
+    }
+
+    function chargeBand(frac) { const B = D().TECH_BANDS; for (const b of B) if (frac >= b.at) return b; return B[B.length - 1]; }
+
+    N.triggerTech = function (who) {
+      who = who || 'you';
+      const a = N.actors[who]; if (!a || N.alarm.active) return { ok: false };
+      const tech = techByKey[a.tech];
+      if (!tech || tech.key === 'pop' || tech.kind === 'hold') return { ok: false };   // pop = triggerBody; the saw is a hold pair
+      if (N.t < ready(who, tech.key)) return { ok: false, cooldown: true };
+      if (tech.needSprint && !a.sprintReady) return { ok: false, needSprint: true };   // a refusal burns NOTHING
+      setReady(who, tech.key, N.t + tech.cooldown);            // armed and thrown — from here it burns
+      const tgt = targetGroup(a, tech.behindM || tech.nearM);
+      if (!tgt) {                                              // fired into an empty hallway: the punchline
+        N.tally.walkby++; a.charge = 0;
+        N.emit('walkby', { body: true, who, tech: tech.key });
+        return { ok: true, grade: { mult: 0, label: 'MISS', id: 'miss' } };
+      }
+      let grade, power;
+      if (tech.kind === 'charge') {
+        grade = chargeBand(a.charge / tech.chargeMax);          // the band comes from charge %…
+        power = tech.power * (1 + a.charge);                    // …and the power scales 1x..(1+chargeMax)x
+      } else {
+        const G = D().GRADES;                                   // slider: the grade IS the runway length
+        grade = a.sprintT >= tech.sprintPerfectS ? G[0] : G[1];
+        power = tech.power;
+      }
+      /* every technique resolves fromBehind. The charge, the beat or the runway IS the skill
+         test — double-taxing the creep (which walks into the light on purpose) with the front
+         cone would punish the fiction. */
+      const res = applyScareToGroup(tgt.grp, who === 'you' ? 'you-body' : 'body:' + who,
+        power, grade.mult, { fromBehind: true, tech: tech.key });
+      a.charge = 0;
+      N.emit('grade', { label: grade.label, id: grade.id, body: true, who, tech: tech.key });
+      return { ok: true, grade, res };
+    };
+
+    N.holdStart = function (who) {
+      who = who || 'you';
+      const a = N.actors[who]; if (!a || N.alarm.active) return { ok: false };
+      const tech = techByKey[a.tech];
+      if (!tech || tech.kind !== 'hold') return { ok: false };
+      if (a.hold) return { ok: true };
+      if (N.t < ready(who, tech.key)) return { ok: false, cooldown: true };
+      a.hold = { until: N.t + tech.maxHoldS, startT: N.t };
+      a.holdHighSaid = false;
+      a.holdCounts = { magnitudeSum: 0, dropped: 0, melted: 0, gotem: 0, screams: 0, flinches: 0 };
+      if (D().TECH.revSpike && a.pitch <= tech.lowPitch) {      // the rev jump — only if it is aimed low
+        const tgt = targetGroup(a, tech.nearM);
+        if (tgt) for (const gst of tgt.grp.guests) {
+          if (gst.out || gst.chicken || gst.state === 'distress') continue;
+          const p = N.guestPos(gst);
+          if (Math.hypot(p.x - a.x, p.z - a.z) > tech.nearM) continue;
+          hitGuest(gst, tgt.grp, tech.power * D().ARCHETYPES[gst.arch].resist * D().GUEST.behindMult,
+            1.0, a.holdCounts, nearestNodeId(tgt.grp), 1);
+        }
+      }
+      return { ok: true };
+    };
+    N.holdEnd = function (who) { who = who || 'you'; const a = N.actors[who]; if (a && a.hold) endHold(who, a); return { ok: true }; };
+
+    function chainsawTick(who, a) {
+      const tech = techByKey.chainsaw;
+      if (N.alarm.active || N.t >= a.hold.until) return endHold(who, a);
+      if (a.pitch > tech.lowPitch) {                            // held HIGH: it fails, and everyone knows it
+        if (!a.holdHighSaid) {
+          a.holdHighSaid = true;
+          N.emit('chainsawHigh', { who });
+          const t2 = targetGroup(a, tech.nearM);
+          if (t2) t2.grp.prime = Math.max(0, t2.grp.prime - D().CHAINSAW_HIGH_PRIME_LOSS);
+        }
+        return;                                                 // no drain — but the clock keeps running
+      }
+      a.holdHighSaid = false;
+      const tgt = targetGroup(a, tech.nearM);
+      if (!tgt) return;
+      const primeMult = 1 + tgt.grp.prime / 180;
+      const nodeId = nearestNodeId(tgt.grp);
+      for (const gst of tgt.grp.guests) {
+        if (gst.out || gst.chicken || gst.state === 'distress') continue;
+        const p = N.guestPos(gst);
+        if (Math.hypot(p.x - a.x, p.z - a.z) > tech.nearM) continue;
+        const arch = D().ARCHETYPES[gst.arch];
+        hitGuest(gst, tgt.grp, tech.drainPerS * DT * arch.resist * primeMult * D().GUEST.behindMult,
+          1.0, a.holdCounts, nodeId, 0);
+        /* THE HERD. This is the point of the saw, and the emergence is deliberate: overusing it
+           closes the gap to the group ahead, i.e. the chainsaw MANUFACTURES conga lines. */
+        if (gst.state === 'walk') gst.s += tech.pushPerS * DT;
+      }
+    }
+    function endHold(who, a) {
+      const tech = techByKey.chainsaw;
+      setReady(who, tech.key, N.t + tech.cooldown);
+      const c = a.holdCounts;
+      if (c && c.magnitudeSum > 0.5) {
+        const tgt = targetGroup(a, tech.nearM + 4);
+        const grp = tgt ? tgt.grp : null;
+        /* ONE aggregate event, so the tape, bestScare and the walkie see one chainsaw RUN
+           rather than 135 ticks. ⚠️ `atT` is the run's START: R.mark centres a take on the
+           stamped time, and stamping the END would centre the tape on the aftermath.
+           ⚠️ magnitude is an INTEGRAL over seconds — divided before it competes with
+           instantaneous pops, or one saw run wins best-scare every single night. */
+        const result = { node: grp ? nearestNodeId(grp) : nodes[0].id,
+          source: who === 'you' ? 'you-body' : 'body:' + who,
+          dropped: c.dropped, melted: c.melted, gotem: c.gotem, screams: c.screams, flinches: c.flinches,
+          magnitude: c.magnitudeSum / D().TECH.holdMagDiv, group: grp ? grp.id : 0,
+          gradeMult: 1.0, tech: 'chainsaw', atT: a.hold ? a.hold.startT : N.t };
+        N.emit('scare', result);
+        if (!N.bestScare || result.magnitude > N.bestScare.magnitude) N.bestScare = { ...result, t: result.atT };
+      }
+      a.hold = null; a.holdCounts = null;
+    }
+
     N.triggerComedy = function (who) {
       who = who || 'you';
       if (N.t < (N.comedyReadyAt[who] || 0)) return { ok: false };
@@ -378,6 +623,7 @@
         if (N.t > N.ghostPlanned.at + 240) N.ghostPlanned.done = true; // she keeps her own hours
       }
       crewTick();
+      actorTick();
       // guests
       for (const gst of N.guests) {
         if (gst.out) continue;

@@ -343,5 +343,50 @@ console.log('\n[11] names');
   ok(H.Net.nameOf('you') === 'you', 'solo play still says "you"');
 }
 
+console.log('\n[12] the trade, over the wire');
+{
+  H.Net.test.reset();
+  const N = mkNight({ nightIdx: 12 });   // night 12: the whole trade is in the bag
+  for (let i = 0; i < 30 * 45; i++) { N.tick(1 / 30); N.events.length = 0; }
+  N.setActor('s1', { x: 20, z: 8, inRoom: true, pitch: -0.2 });
+  N.setTechnique('s1', 'scarecrow');
+  for (let i = 0; i < 30 * 4; i++) { N.setActor('s1', { x: 20, z: 8, inRoom: true, pitch: -0.2 }); N.tick(1 / 30); N.events.length = 0; }
+
+  const before = JSON.stringify({ t: N.t, tally: N.tally, drawer: N.drawer, a: N.actors.s1 });
+  const snap = H.Net.snapshot(N, {}, []);
+  ok(JSON.stringify({ t: N.t, tally: N.tally, drawer: N.drawer, a: N.actors.s1 }) === before,
+    'taking a snapshot never writes to the night');
+
+  const decoded = H.Net.readActors(snap, snap.tt);
+  ok(!!decoded.s1, 'the wire carries the performers', Object.keys(decoded).join(','));
+  ok(decoded.s1.tech === 'scarecrow', 'the selected technique survives the round trip', decoded.s1.tech);
+  ok(Math.abs(decoded.s1.charge - N.actors.s1.charge) < 0.02,
+    'and so does the charge — this is how a guest sees their own meter',
+    decoded.s1.charge.toFixed(2) + ' vs ' + N.actors.s1.charge.toFixed(2));
+  ok(decoded.s1.hold === null, 'no saw running, so no hold on the wire');
+
+  N.setTechnique('s1', 'chainsaw');
+  N.holdStart('s1');
+  const held = H.Net.readActors(H.Net.snapshot(N, {}, []), N.t);
+  ok(!!held.s1.hold && held.s1.hold.until > N.t, 'a live saw run reaches the guest', 'until +' + (held.s1.hold.until - N.t).toFixed(2) + 's');
+
+  /* the host trusts NOTHING: a seat cannot teleport itself into a group, and it cannot take
+     out a technique scare school has not covered. */
+  N.setActor('s1', { x: 9999, z: -9999, inRoom: true, pitch: 0 });
+  N.tick(1 / 30);
+  const B = H.DATA.BARN;
+  ok(N.actors.s1.x <= B.x1 && N.actors.s1.x >= B.x0 && N.actors.s1.z <= B.z1 && N.actors.s1.z >= B.z0,
+    'a wire position is clamped into the barn', `(${N.actors.s1.x.toFixed(1)}, ${N.actors.s1.z.toFixed(1)})`);
+  ok(N.actors.s1.speed <= H.DATA.TECH.posSpeedMax + 0.01,
+    'and its speed is capped, however far it claimed to jump', N.actors.s1.speed.toFixed(2) + ' m/s');
+
+  const early = H.Sim.createNight({ seed: 5, nightIdx: 1, build: { slots: {} }, crewAt: {}, absent: [], spacingId: 'standard', ticket: 12, seasonFlags: {} });
+  early.setActor('s1', { x: 20, z: 8, inRoom: true });
+  ok(early.setTechnique('s1', 'slider').ok === false, 'a locked technique off the wire is refused');
+  ok(early.setTechnique('s1', 'javascript:alert(1)').ok === false, 'and so is junk');
+  ok(early.actors.s1.tech === 'pop', 'the seat keeps what it had', early.actors.s1.tech);
+}
+
+
 console.log(`\n=================\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

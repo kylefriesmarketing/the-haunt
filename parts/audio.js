@@ -96,6 +96,40 @@
     [523.25, 659.25, 783.99, 1046.5].forEach(function (f, i) { tone('triangle', f, t + i * 0.11, 0.5, 0.055); });
   };
   A.chalkTick = function () { if (!ensure()) return; noise(now(), 0.03, 0.05, 4200); };
+  /* ---------- the trade, by ear ----------
+     ⚠️ NOT garnish. A charge technique whose only state is a 150px DOM bar is the first verb in
+     this game a player cannot run with their eyes off the HUD, and the README's own boast is
+     that the whole thing is playable by ear. The band blips and the saw idle are required. */
+  A.saw = function (on, low) {
+    if (!ensure()) return;
+    if (!on) {
+      if (A.sawNode) { try { A.sawNode.g.gain.setTargetAtTime(0, now(), 0.05); A.sawNode.o.stop(now() + 0.3); A.sawNode.l.stop(now() + 0.3); } catch (e) { } A.sawNode = null; }
+      return;
+    }
+    if (A.sawNode) { A.sawNode.g.gain.setTargetAtTime(low ? 0.13 : 0.045, now(), 0.06); return; }
+    const o = A.ctx.createOscillator(), g = A.ctx.createGain();
+    o.type = 'sawtooth'; o.frequency.value = 62;
+    const l = A.ctx.createOscillator(), lg = A.ctx.createGain();
+    l.frequency.value = 11; lg.gain.value = 9;            // the wobble that makes it a two-stroke
+    l.connect(lg); lg.connect(o.frequency);
+    g.gain.value = 0; g.gain.setTargetAtTime(low ? 0.13 : 0.045, now(), 0.05);
+    o.connect(g); g.connect(A.master); o.start(); l.start();
+    A.sawNode = { o, g, l };
+  };
+  /* one blip per band CROSSING, never per frame: this is how you feel a charge ripen without
+     looking down. Pitch rises with the band, so "unbearable" is audibly the top of the ladder. */
+  A.bandUp = function (bandIdx) {
+    if (!ensure()) return;
+    const f = [660, 520, 415, 330][Math.max(0, Math.min(3, bandIdx))];
+    tone('triangle', f, now(), 0.1, 0.07);
+  };
+  A.slide = function () {
+    if (!ensure()) return;
+    const t = now();
+    noise(t, 0.3, 0.16, 2600);
+    tone('sawtooth', 220, t, 0.28, 0.06, 70);
+  };
+
   A.cash = function () { if (!ensure()) return; const t = now(); tone('triangle', 880, t, 0.07, 0.08); tone('triangle', 1174, t + 0.07, 0.12, 0.08); };
   A.click = function () { if (!ensure()) return; tone('sine', 500, now(), 0.04, 0.05); };
   A.doorCreak = function () { if (!ensure()) return; tone('sawtooth', 130, now(), 0.7, 0.03, 210); };
